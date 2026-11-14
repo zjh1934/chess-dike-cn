@@ -52,15 +52,34 @@ class VoiceSpeaker(context: Context) {
     /**
      * 一条支招结果产生时调用（renderOverlay 内、主线程）。
      * 开关与引擎每次从持久化配置现读，设置页改动即时生效。
+     *
+     * v1.2：扩展 advantageText / readMask 两个默认参数（旧 4 参数调用仍可编译），
+     * 交给 [VoicePrompt.resolve] 做「朗读内容多选」决策，并在决策处写诊断埋点
+     * （类别 / 勾选态 / 跳过原因 / 文本清洗前后对比 / 最终朗读文本）。
      */
-    fun onSuggestion(moveCount: Int, enabled: Boolean, suggestionText: String, engine: String?) {
+    fun onSuggestion(
+        moveCount: Int,
+        enabled: Boolean,
+        suggestionText: String,
+        engine: String?,
+        advantageText: String = "",
+        readMask: Int = VoicePrompt.DEFAULT_MASK,
+    ) {
         synchronized(this) {
             if (shuttingDown) return
-            val decision = VoicePrompt.resolve(moveCount, enabled, suggestionText)
+            val decision = VoicePrompt.resolve(moveCount, enabled, suggestionText, advantageText, readMask)
+            // 决策埋点：原文换行压平保证单行；跳过原因由 resolve.reason 枚举给出。
+            // 变量先算好再插值，避免在字符串模板里嵌套双引号字面量。
+            val reasonText = decision.reason.ifEmpty { "—" }
+            val spokenText = decision.text.ifEmpty { "—" }
+            val raw = suggestionText.replace("\n", "／")
+            VoiceDiag.log(appContext, "决策",
+                "类别=${decision.category.name} 朗读=${decision.shouldSpeak} " +
+                    "reason=$reasonText ｜ 原文=$raw → 朗读文本=$spokenText")
             when {
                 // 开关明确关闭：立即停读并清去重态（重开后当前建议可重新朗读）
                 !enabled -> cancel()
-                // 支两招/三招、或非建议类文案：不朗读、也不打断正在读的一段
+                // 支两招/三招、类别未勾选、空文本等：不朗读、也不打断正在读的一段
                 !decision.shouldSpeak -> Unit
                 else -> {
                     rebuild(engine)

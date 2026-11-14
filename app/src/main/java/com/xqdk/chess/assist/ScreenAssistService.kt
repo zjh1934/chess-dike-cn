@@ -1951,7 +1951,7 @@ class ScreenAssistService : Service() {
         // 每次从持久化配置现读（设置页热改即时生效），去重/打断/异步排队/引擎重建
         // 由 VoiceSpeaker 内部负责。关闭或非 1 招/非建议文案时纯函数给出不读，
         // 不触碰支招计算、悬浮窗、连线等任何原有行为。
-        voiceSpeaker?.onSuggestion(multiPv, config.voiceEnabled, candidateText ?: "", config.ttsEngine)
+        voiceSpeaker?.onSuggestion(multiPv, config.voiceEnabled, candidateText ?: "", config.ttsEngine, advantageText ?: "", config.voiceReadMask)
     }
 
     private fun lineScoreText(line: AnalysisLine): String {

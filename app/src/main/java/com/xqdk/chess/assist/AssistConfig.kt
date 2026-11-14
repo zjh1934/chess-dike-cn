@@ -128,6 +128,15 @@ class AssistConfig(context: Context) {
         get() = sp.getBoolean(KEY_VOICE_DIAG_ENABLED, true)
         set(value) { sp.edit().putBoolean(KEY_VOICE_DIAG_ENABLED, value).apply() }
 
+    /**
+     * 语音「朗读内容多选」位掩码（v1.2）：见 VoicePrompt.Category / DEFAULT_MASK。
+     * 默认 DEFAULT_MASK = SUGGESTION|BOOK，保持 v1.1「只读建议/开局库着法」。
+     * VoiceSettingsActivity 的 5 个勾选项读写此值，ScreenAssistService 每次建议现读。
+     */
+    var voiceReadMask: Int
+        get() = sp.getInt(KEY_VOICE_READ_MASK, VoicePrompt.DEFAULT_MASK)
+        set(value) { sp.edit().putInt(KEY_VOICE_READ_MASK, value).apply() }
+
     companion object {
         private const val KEY_RECOGNIZER_ENGINE = "recognizer_engine"
         private const val KEY_FRAME_W = "frame_w"
@@ -147,5 +156,6 @@ class AssistConfig(context: Context) {
         private const val KEY_VOICE_ENABLED = "voice_enabled"
         private const val KEY_TTS_ENGINE = "tts_engine"
         private const val KEY_VOICE_DIAG_ENABLED = "voice_diag_enabled"
+        private const val KEY_VOICE_READ_MASK = "voice_read_mask"
     }
 }

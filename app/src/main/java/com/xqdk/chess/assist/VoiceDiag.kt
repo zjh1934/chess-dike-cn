@@ -22,13 +22,15 @@ import java.util.Locale
  * 记录项：开关与引擎配置快照、TTS 实例构造与引擎包名、getEngines() 枚举结果、
  * onInit status、setLanguage 结果与当前 locale、speak() 返回值、去重/排队/打断
  * 决策、UtteranceProgress 的 onStart/onDone/onError、试听事件、服务 onCreate/onDestroy、
- * 配置变更。
+ * 配置变更、v1.2 朗读内容多选决策（类别/勾选态/清洗前后文本）、SAF 导出事件。
  *
  * 「一键导出」模型：日志先入内存会话缓冲（每条 [log] 以 synchronized 追加、立即可
- * 导出，写失败静默不拖垮主链路），点导出时由 [export] 一次性组装成带完整表头与设备/
- * 版本信息的 Markdown 文件并 flush 落盘。落盘口径与 DiagLogWriter 相同：API 29+ 用
- * MediaStore.Downloads（MIME text/markdown），API 26-28 回退应用专属外部目录；
- * [displayPath] 为最近一次导出的可展示路径。上限 [MAX_LINES] 行防无限增长。
+ * 导出，写失败静默不拖垮主链路），点导出时由 [buildDocument] 一次性组装成带完整表头
+ * 与设备/版本信息的 Markdown。v1.2 起主路径走 SAF 自选路径（[buildDocument] 供
+ * Activity 复用），[export] 保留为写下载目录的兜底。上限 [MAX_LINES] 行防无限增长。
+ *
+ * 刷屏聚合（v1.2）：连续相同的 tag+detail 不新增行、只累加 [Entry.count]，导出时
+ * count>1 渲染成「xxx（连续 N 次）」，避免「去重/打断/排队/onStart/onDone」高频刷屏。
  *
  * 开关 AssistConfig.voiceDiagEnabled（默认 true）：关闭时 [log] 不写任何行。
  */
@@ -37,57 +39,86 @@ object VoiceDiag {
     /** 会话缓冲行数上限（防无限增长；保留最近若干行） */
     const val MAX_LINES = 2000
 
-    /** 最近一次导出文件路径（成功为可展示路径；失败/未导出为 null） */
+    /** 语音模块稳定版本标识（我们自己的版本，不受 git describe 派生干扰） */
+    const val VOICE_MODULE_VERSION = "1.2"
+
+    /** 最近一次 [export] 导出文件路径（成功为可展示路径；失败/未导出为 null） */
     @Volatile
     var displayPath: String? = null
         private set
 
     private val lock = Any()
-    private val lines = ArrayList<String>()
+
+    /** 会话日志条目：count 用于把连续相同的 tag+detail 聚合成一行。 */
+    data class Entry(val time: String, val tag: String, val detail: String, val count: Int = 1)
+
+    private val entries = ArrayList<Entry>()
 
     /**
-     * 追加一条语音链路事件。格式化为带 HH:mm:ss.SSS 时间戳与标签的 Markdown 表格行，
+     * 追加一条语音链路事件。连续相同的 tag+detail 只累加计数不新增行（刷屏聚合）。
      * 追加后即成为可导出状态（写失败不会抛出、不影响朗读主链路）。
      */
     fun log(context: Context, tag: String, detail: String) {
         if (!AssistConfig(context).voiceDiagEnabled) return
         val time = synchronized(CLOCK) { CLOCK.format(Date()) }
-        val row = formatRow(time, tag, detail)
         synchronized(lock) {
-            lines.add(row)
-            if (lines.size > MAX_LINES) {
+            val last = entries.lastOrNull()
+            if (last != null && last.tag == tag && last.detail == detail) {
+                // 连续重复：更新时间为最近一次、计数 +1，不新增行
+                entries[entries.size - 1] = last.copy(count = last.count + 1, time = time)
+            } else {
+                entries.add(Entry(time, tag, detail, 1))
+            }
+            if (entries.size > MAX_LINES) {
                 // 越界才裁剪：保留最近 MAX_LINES 行（与纯函数 trimToLimit 同语义）
-                val kept = trimToLimit(lines, MAX_LINES)
-                lines.clear()
-                lines.addAll(kept)
+                val kept = entries.subList(entries.size - MAX_LINES, entries.size).toList()
+                entries.clear()
+                entries.addAll(kept)
             }
         }
     }
 
     /** 清空当前会话缓冲（不删除已导出的文件） */
     fun clear() {
-        synchronized(lock) { lines.clear() }
+        synchronized(lock) { entries.clear() }
     }
 
     /**
-     * 一键导出：把当前会话日志写成一个新的、带完整表头与设备/版本信息的 .md 文件
-     * （文件名 XQDK_语音诊断_yyyyMMdd_HHmmss.md），触发媒体扫描，返回可展示路径。
-     * 全流程 runCatching 包裹，失败返回 null。
+     * 组装完整导出文档（v1.2）：取当前会话快照、刷屏聚合后逐行渲染，补齐设备/
+     * 版本（经 [displayVersion] 修正）/SDK/导出时间，调纯函数 [buildExportDocument]。
+     * 供 SAF 自选路径写入，也被兜底 [export] 复用。
+     */
+    fun buildDocument(context: Context): String {
+        val snapshot = synchronized(lock) { entries.toList() }
+        val rows = mergeConsecutive(snapshot).map { e ->
+            formatRowWithCount(e.time, e.tag, e.detail, e.count)
+        }
+        val device = "${Build.MANUFACTURER} ${Build.MODEL}（Android ${Build.VERSION.RELEASE}）"
+        val rawVer = try {
+            com.xqdk.chess.BuildConfig.VERSION_NAME
+        } catch (_: Throwable) {
+            "?"
+        }
+        val ver = displayVersion(rawVer)
+        val exportTime = synchronized(STAMP) { STAMP.format(Date()) }
+        val doc = buildExportDocument(device, ver, Build.VERSION.SDK_INT, exportTime, rows)
+        // 稳定语音模块版本行：不改纯函数 buildExportDocument，在文档头部信息区补一行
+        return doc.replace(
+            "- 版本：$ver\n",
+            "- 语音模块版本：$VOICE_MODULE_VERSION\n- 版本：$ver\n"
+        )
+    }
+
+    /**
+     * 兜底导出：写公共 Download（API 29+ 走 MediaStore.Downloads；API 26-28 回退
+     * 应用专属外部目录），无需存储权限。SAF 自选路径取消/写失败时由设置页回落调用。
+     * 返回可展示路径；全流程 runCatching 包裹，失败返回 null。
      */
     fun export(context: Context): String? {
-        val snapshot = synchronized(lock) { lines.toList() }
         var path: String? = null
         return try {
-            val device = "${Build.MANUFACTURER} ${Build.MODEL}（Android ${Build.VERSION.RELEASE}）"
-            val ver = try {
-                com.xqdk.chess.BuildConfig.VERSION_NAME
-            } catch (_: Throwable) {
-                "?"
-            }
-            val exportTime = synchronized(STAMP) { STAMP.format(Date()) }
-            val dateTag = synchronized(FILE_STAMP) { FILE_STAMP.format(Date()) }
-            val doc = buildExportDocument(device, ver, Build.VERSION.SDK_INT, exportTime, snapshot)
-            val name = exportFileName(dateTag)
+            val doc = buildDocument(context)
+            val name = exportFileName(synchronized(FILE_STAMP) { FILE_STAMP.format(Date()) })
 
             if (Build.VERSION.SDK_INT >= 29) {
                 val resolver = context.contentResolver
@@ -132,9 +163,6 @@ object VoiceDiag {
         }
     }
 
-    // 注意：VoiceDiag 本身是 standalone object（单例），Kotlin 不允许在 object 内再
-    // 声明 companion object（"Modifier 'companion' is not applicable inside 'standalone
-    // object'"）。纯函数与常量直接作为 object 成员即可，外部仍以 VoiceDiag.xxx 调用。
     private const val TAG = "VoiceDiag"
 
     /** 导出表格表头（三列：时间/标签/详情） */
@@ -150,6 +178,36 @@ object VoiceDiag {
 
     private fun esc(s: String): String =
         s.replace("|", "\\|").replace("\r", " ").replace("\n", " ")
+
+    /** 含计数行的格式化（纯函数）：count>1 在详情后追加「（连续 N 次）」，count<=1 原样。 */
+    fun formatRowWithCount(time: String, tag: String, detail: String, count: Int): String =
+        if (count > 1) formatRow(time, tag, "$detail（连续 $count 次）")
+        else formatRow(time, tag, detail)
+
+    /**
+     * 刷屏聚合纯函数：连续相同的 tag+detail 合并为一条（count 累加、time 取最新），
+     * 相邻不同则不聚合。count=1 的条目原样保留。供 JVM 单测覆盖。
+     */
+    fun mergeConsecutive(rows: List<Entry>): List<Entry> {
+        val out = ArrayList<Entry>()
+        for (e in rows) {
+            val last = out.lastOrNull()
+            if (last != null && last.tag == e.tag && last.detail == e.detail) {
+                out[out.size - 1] = last.copy(count = last.count + e.count, time = e.time)
+            } else {
+                out.add(e.copy())
+            }
+        }
+        return out
+    }
+
+    /**
+     * 版本号展示修正（纯函数）：本仓库 tag 是 voice-1.x，而 build.gradle.kts 用
+     * git describe --tags --match "v*" 后 .removePrefix("v")，把 voice-... 的首字母
+     * v 一并削掉变成 oice-...。这里在日志侧补回 v；其余原样返回，不改构建脚本。
+     */
+    fun displayVersion(raw: String): String =
+        if (raw.startsWith("oice-")) "v$raw" else raw
 
     /** 上限裁剪：纯函数，保留最近 limit 行（limit<=0 返回空）。 */
     fun trimToLimit(rows: List<String>, limit: Int): List<String> {

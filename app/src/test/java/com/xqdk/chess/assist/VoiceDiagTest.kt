@@ -88,4 +88,99 @@ class VoiceDiagTest {
         assertTrue(VoiceDiag.TABLE_HEADER.startsWith("| 时间 | 标签 | 详情 |"))
         assertTrue(VoiceDiag.TABLE_HEADER.contains("|---|---|---|"))
     }
+
+    // ===== v1.2 任务5：版本号展示修正 =====
+
+    @Test
+    fun `displayVersion补回被削掉的v首字母`() {
+        assertEquals("voice-1.0-2-gb5f34d0", VoiceDiag.displayVersion("oice-1.0-2-gb5f34d0"))
+        assertEquals("3.2", VoiceDiag.displayVersion("3.2"))
+        assertEquals("", VoiceDiag.displayVersion(""))
+        assertEquals("voice-1.2", VoiceDiag.displayVersion("voice-1.2"))
+    }
+
+    @Test
+    fun `语音模块版本常量稳定`() {
+        assertEquals("1.2", VoiceDiag.VOICE_MODULE_VERSION)
+    }
+
+    // ===== v1.2 任务5：刷屏聚合纯函数 =====
+
+    @Test
+    fun `mergeConsecutive聚合连续相同条目并取最新时间`() {
+        val rows = listOf(
+            VoiceDiag.Entry("t1", "去重", "跳过重复：炮二平五", 1),
+            VoiceDiag.Entry("t2", "去重", "跳过重复：炮二平五", 1),
+            VoiceDiag.Entry("t3", "去重", "跳过重复：炮二平五", 1),
+            VoiceDiag.Entry("t4", "打断", "QUEUE_FLUSH 覆盖上一段", 1),
+        )
+        val merged = VoiceDiag.mergeConsecutive(rows)
+        assertEquals(2, merged.size)
+        assertEquals(3, merged[0].count)
+        assertEquals("t3", merged[0].time)
+        assertEquals("打断", merged[1].tag)
+        assertEquals(1, merged[1].count)
+    }
+
+    @Test
+    fun `mergeConsecutive相邻不同不聚合且count=1原样`() {
+        val rows = listOf(
+            VoiceDiag.Entry("t1", "去重", "A", 1),
+            VoiceDiag.Entry("t2", "打断", "A", 1),
+            VoiceDiag.Entry("t3", "去重", "A", 1),
+        )
+        val merged = VoiceDiag.mergeConsecutive(rows)
+        assertEquals(3, merged.size)
+        merged.forEach { assertEquals(1, it.count) }
+    }
+
+    @Test
+    fun `mergeConsecutive空列表与已有count累加`() {
+        assertEquals(emptyList<VoiceDiag.Entry>(), VoiceDiag.mergeConsecutive(emptyList()))
+        val merged = VoiceDiag.mergeConsecutive(listOf(
+            VoiceDiag.Entry("t1", "x", "y", 5),
+            VoiceDiag.Entry("t2", "x", "y", 2),
+        ))
+        assertEquals(1, merged.size)
+        assertEquals(7, merged[0].count)
+    }
+
+    @Test
+    fun `聚合后行数受上限约束`() {
+        val rows = (1..10).map { VoiceDiag.Entry("t", "去重", "同一条", 1) }
+        val merged = VoiceDiag.mergeConsecutive(rows)
+        assertEquals(1, merged.size)
+        assertEquals(10, merged[0].count)
+        val rendered = merged.map {
+            VoiceDiag.formatRowWithCount(it.time, it.tag, it.detail, it.count)
+        }
+        assertEquals(rendered, VoiceDiag.trimToLimit(rendered, VoiceDiag.MAX_LINES))
+    }
+
+    @Test
+    fun `formatRowWithCount含计数行与count=1原样`() {
+        val base = VoiceDiag.formatRow("t", "去重", "跳过重复：炮二平五")
+        assertEquals(base, VoiceDiag.formatRowWithCount("t", "去重", "跳过重复：炮二平五", 1))
+        assertEquals(base, VoiceDiag.formatRowWithCount("t", "去重", "跳过重复：炮二平五", 0))
+        val withCount = VoiceDiag.formatRowWithCount("t", "去重", "跳过重复：炮二平五", 3)
+        assertTrue(withCount.contains("（连续 3 次）"))
+        assertTrue(withCount.startsWith("| "))
+        assertTrue(withCount.endsWith(" |\n"))
+    }
+
+    @Test
+    fun `含计数行仍转义竖线并保持三列`() {
+        val row = VoiceDiag.formatRowWithCount("t", "speak", "a|b", 2)
+        assertTrue(row.contains("a\\|b"))
+        assertTrue(row.contains("（连续 2 次）"))
+    }
+
+    @Test
+    fun `含计数行可进导出文档`() {
+        val rows = listOf(VoiceDiag.formatRowWithCount("t", "去重", "跳过重复：炮二平五", 5))
+        val doc = VoiceDiag.buildExportDocument("d", "v", 33, "ts", rows)
+        assertTrue(doc.contains("（连续 5 次）"))
+        assertTrue(doc.contains(VoiceDiag.TABLE_HEADER))
+        assertTrue(doc.contains("- 记录行数：1"))
+    }
 }

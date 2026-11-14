@@ -29,7 +29,7 @@ on:
         description: 'Release 标签名（不以 v 开头，避免触发官方 Build-XQDK 流水线）'
         type: string
         required: false
-        default: 'voice-1.1'
+        default: 'voice-1.2'
 
 permissions:
   contents: write
@@ -84,10 +84,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ inputs.release_tag }}
-          RELEASE_TITLE: '象棋迪克 XQDK · 支招语音提示版 v1.1'
+          RELEASE_TITLE: '象棋迪克 XQDK · 支招语音提示版 v1.2'
         run: |
           set -euo pipefail
-          TAG="${RELEASE_TAG:-voice-1.1}"
+          TAG="${RELEASE_TAG:-voice-1.2}"
           echo "发布标签: $TAG"
           echo "产物清单:"
           ls -lh dist/

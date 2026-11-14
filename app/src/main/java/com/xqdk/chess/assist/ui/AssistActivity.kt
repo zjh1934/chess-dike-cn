@@ -15,7 +15,6 @@ import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
 import android.provider.Settings
-import android.speech.tts.TextToSpeech
 import android.util.TypedValue
 import android.view.View
 import android.widget.Button
@@ -28,8 +27,6 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import com.xqdk.chess.R
 import com.xqdk.chess.assist.ScreenAssistService
-import com.xqdk.chess.assist.VoiceDiag
-import com.xqdk.chess.assist.VoiceSpeaker
 
 /**
  * 连线工作页（美学终稿 §3.2）：纸底仪器面（识别点阵 + 状态行 + hero + 河界线）+
@@ -85,13 +82,6 @@ class AssistActivity : AppCompatActivity() {
      *  不随配置重建恢复——弹窗在屏时旋转会被系统强制关闭，冷启动条件又不再成立，
      *  不补弹即静默旁路合规门槛（体检 P1）。未同意 ⇒ 重建后 onResume 补弹。 */
     private var disclaimerAgreed = false
-
-    /** 设置页 TTS 引擎探测实例（仅用于 getEngines() 枚举，回调内即 shutdown 避免泄漏） */
-    private var engineProbe: TextToSpeech? = null
-    /** 试听用的一次性 VoiceSpeaker（独立于服务实例，朗读结束自释放；onDestroy 兜底） */
-    private var voiceTester: VoiceSpeaker? = null
-    /** 语音引擎候选：(显示名, 包名)，首项恒为「跟随系统」(包名="") */
-    private var voiceEngineChoices: List<Pair<String, String>> = listOf("跟随系统" to "")
 
     // 步骤行（①②整行可点，③静态说明行）
     private lateinit var btnOverlay: View
@@ -336,94 +326,10 @@ class AssistActivity : AppCompatActivity() {
             }
         }
 
-        // ---- 语音提示：支一招结果自动朗读（开关）+ TTS 引擎选择 + 试听/导出/诊断开关 ----
-        // 开关与引擎都写持久化配置；服务在每次建议渲染时现读，设置热改即时生效，
-        // 且不影响支招计算/悬浮窗/连线等任何原有行为。
-        val btnVoice = findViewById<Button>(R.id.btn_voice_prompt)
-        btnVoice.text = if (cfg.voiceEnabled) "开" else "关"
-        btnVoice.setOnClickListener {
-            val on = !cfg.voiceEnabled
-            cfg.voiceEnabled = on
-            btnVoice.text = if (on) "开" else "关"
-            VoiceDiag.log(this@AssistActivity, "配置变更", "语音提示=${if (on) "开" else "关"}")
-        }
-
-        val btnVoiceEngine = findViewById<Button>(R.id.btn_voice_engine)
-        updateVoiceEngineButton(btnVoiceEngine)
-        btnVoiceEngine.setOnClickListener {
-            // 取快照：引擎列表由异步 getEngines() 回调填充，对话框存活期间列表可能被替换，
-            // 若点击时再按新列表索引 which 会错位/越界。
-            val choices = voiceEngineChoices
-            val labels = choices.map { it.first as CharSequence }.toTypedArray()
-            val checked = choices.indexOfFirst { it.second == cfg.ttsEngine }.coerceAtLeast(0)
-            androidx.appcompat.app.AlertDialog.Builder(this)
-                .setTitle("语音提示引擎")
-                .setSingleChoiceItems(labels, checked) { d, which ->
-                    if (which in choices.indices) {
-                        cfg.ttsEngine = choices[which].second
-                        VoiceDiag.log(this@AssistActivity, "配置变更", "TTS引擎=${choices[which].first}")
-                    }
-                    updateVoiceEngineButton(btnVoiceEngine)
-                    d.dismiss()
-                }
-                .setNegativeButton("取消", null)
-                .show()
-        }
-        // 异步枚举设备已安装 TTS 引擎（getEngines 在 onInit(SUCCESS) 后取值最稳）；
-        // 一次性探测实例，回调内用完即 shutdown，避免持有 TTS 服务连接。
-        engineProbe = try {
-            TextToSpeech(applicationContext, TextToSpeech.OnInitListener { status ->
-                val probe = engineProbe
-                val installed = ArrayList<TextToSpeech.EngineInfo>()
-                if (status == TextToSpeech.SUCCESS) {
-                    runCatching { probe?.engines?.let { installed.addAll(it) } }
-                }
-                voiceEngineChoices = listOf("跟随系统" to "") +
-                    installed.map { it.label to it.name }
-                VoiceDiag.log(applicationContext, "引擎枚举",
-                    "onInit=$status 已安装=${installed.size} 列表=" +
-                        installed.joinToString("、") { "${it.label}(${it.name})" }.ifEmpty { "无" })
-                runCatching { probe?.shutdown() }
-                engineProbe = null
-                if (!isFinishing && !isDestroyed) updateVoiceEngineButton(btnVoiceEngine)
-            })
-        } catch (t: Throwable) {
-            null
-        }
-
-        // 试听：独立于服务实例，用当前选中引擎朗读固定中文，绕过支招条件与去重。
-        // 全程写语音诊断日志，用户可据此区分"TTS 通路坏"还是"支招触发没走到"。
-        val btnVoiceTest = findViewById<Button>(R.id.btn_voice_test)
-        btnVoiceTest.setOnClickListener {
-            VoiceDiag.log(this@AssistActivity, "试听",
-                "点击试听（引擎=${cfg.ttsEngine.ifEmpty { "跟随系统" }}）")
-            voiceTester?.shutdown()
-            voiceTester = VoiceSpeaker(applicationContext).also {
-                it.speakTest("语音提示正常，炮二平五", cfg.ttsEngine)
-            }
-        }
-
-        // 一键导出语音诊断日志：成功/失败都 Toast 反馈文件路径
-        val btnVoiceExport = findViewById<Button>(R.id.btn_voice_export)
-        btnVoiceExport.setOnClickListener {
-            VoiceDiag.log(this@AssistActivity, "导出", "点击导出诊断日志")
-            val path = VoiceDiag.export(this@AssistActivity)
-            Toast.makeText(
-                this@AssistActivity,
-                if (path != null) "诊断日志已导出：$path" else "导出失败，请检查存储空间/权限后重试",
-                Toast.LENGTH_LONG
-            ).show()
-        }
-
-        // 诊断记录开关：与语音开关同一套写法（默认开，开箱即可导出）
-        val btnVoiceDiag = findViewById<Button>(R.id.btn_voice_diag)
-        btnVoiceDiag.text = if (cfg.voiceDiagEnabled) "开" else "关"
-        btnVoiceDiag.setOnClickListener {
-            val on = !cfg.voiceDiagEnabled
-            // 先写再改配置：即便切到"关"，这条配置变更也能落入日志
-            VoiceDiag.log(this@AssistActivity, "配置变更", "诊断记录→${if (on) "开" else "关"}")
-            cfg.voiceDiagEnabled = on
-            btnVoiceDiag.text = if (on) "开" else "关"
+        // ---- 语音设置：主页只留一个入口，全部语音功能收进独立 VoiceSettingsActivity ----
+        // （开关/引擎/朗读内容多选/试听/诊断/导出均在该页，少破坏原生布局）
+        findViewById<Button>(R.id.btn_voice_settings).setOnClickListener {
+            startActivity(Intent(this, VoiceSettingsActivity::class.java))
         }
 
         // bindService 返回值决定是否需要解绑：绑定失败仍置 bound 会在 onDestroy 泄漏连接
@@ -510,12 +416,6 @@ class AssistActivity : AppCompatActivity() {
         // 不销毁本页，悬浮窗指导照常存活。
         if (isFinishing) service?.stopGuidance()
         if (bound) unbindService(connection)
-        // 引擎枚举探测实例用完释放（回调未到时由这里兜底 shutdown）
-        runCatching { engineProbe?.shutdown() }
-        engineProbe = null
-        // 试听一次性实例兜底释放（正常由朗读结束 onDone/onError 自释放）
-        runCatching { voiceTester?.shutdown() }
-        voiceTester = null
         super.onDestroy()
     }
 
@@ -567,12 +467,6 @@ class AssistActivity : AppCompatActivity() {
             .setMessage(text)
             .setPositiveButton("我知道了", null)
             .show()
-    }
-
-    /** 语音引擎按钮回填：按持久化的引擎包名找显示名；跟随系统/尚未探测到时显示默认项。 */
-    private fun updateVoiceEngineButton(btn: Button) {
-        val engine = com.xqdk.chess.assist.AssistConfig(this).ttsEngine
-        btn.text = voiceEngineChoices.firstOrNull { it.second == engine }?.first ?: "跟随系统"
     }
 
     /** 文本变化才 setText（1s 轮询不重写视图，避免频跳） */
