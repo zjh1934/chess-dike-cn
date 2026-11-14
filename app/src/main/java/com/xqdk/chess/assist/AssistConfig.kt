@@ -120,6 +120,14 @@ class AssistConfig(context: Context) {
         get() = sp.getString(KEY_TTS_ENGINE, "") ?: ""
         set(value) { sp.edit().putString(KEY_TTS_ENGINE, value).apply() }
 
+    /**
+     * 语音诊断日志开关（默认开）：只控制新建的语音诊断通道（VoiceDiag），与性能诊断
+     * DiagLogWriter 完全独立。关掉后不写任何语音诊断行；开箱即默认开，保证一键导出可用。
+     */
+    var voiceDiagEnabled: Boolean
+        get() = sp.getBoolean(KEY_VOICE_DIAG_ENABLED, true)
+        set(value) { sp.edit().putBoolean(KEY_VOICE_DIAG_ENABLED, value).apply() }
+
     companion object {
         private const val KEY_RECOGNIZER_ENGINE = "recognizer_engine"
         private const val KEY_FRAME_W = "frame_w"
@@ -138,5 +146,6 @@ class AssistConfig(context: Context) {
         private const val KEY_PRECOMPUTE_ENABLED = "precompute_enabled"
         private const val KEY_VOICE_ENABLED = "voice_enabled"
         private const val KEY_TTS_ENGINE = "tts_engine"
+        private const val KEY_VOICE_DIAG_ENABLED = "voice_diag_enabled"
     }
 }

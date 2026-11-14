@@ -1,5 +1,28 @@
 # 象棋迪克 XQDK -- 开源免费的安卓版中国象棋学习工具
 
+> ## ⚠️ 本仓库是第三方派生分支，不是官方版本
+>
+> | | |
+> |---|---|
+> | **原作者 / 上游项目** | [Silva6c/chess-dike · 象棋迪克 XQDK](https://github.com/Silva6c/chess-dike)（作者 **Silva6c**） |
+> | **上游 Releases** | https://github.com/Silva6c/chess-dike/releases |
+> | **上游许可证** | **GPL-3.0**（见 [LICENSE](LICENSE)），本分支继承同一许可证，源码保持开源 |
+> | **本分支** | https://github.com/zjh1934/xqdk-voice ，由 zjh1934 维护，与上游作者无隶属关系 |
+> | **本分支改动** | 仅新增「支招结果语音播报」及其配套的**试听**、**语音诊断日志 / 一键导出 MD**；其余识别、引擎、开局库、悬浮窗等核心代码均来自上游 |
+>
+> **著作权与致谢**：本项目全部原有代码、设计、文档的著作权归原作者 Silva6c 及上游贡献者所有，
+> 在此致谢。本分支只是基于 GPL-3.0 的二次开发，**不代表官方发布**，请优先到
+> [上游仓库](https://github.com/Silva6c/chess-dike) 获取正式版本与反馈问题。
+>
+> **签名与资产须知**：本分支不持有上游官方签名密钥，Release 包为 **debug 签名**，
+> 不能覆盖安装官方版（需先卸载）；上游受版权保护的 ONNX 识别模型与桔库开局库
+> **未随本分支分发**，缺失时按上游设计自动降级（识别回退 YOLO、连线降级纯引擎）。
+> 因此本分支的安装包**不具备官方版的完整能力，也不受官方版本安全线（v3.2+ 签名核验）覆盖**。
+>
+> 下方介绍、徽章与文档章节主要沿用上游 README，描述的是**上游项目**；本分支特有改动见
+> [docs/RELEASE_VOICE.md](docs/RELEASE_VOICE.md)。第三方组件许可义务见
+> [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。
+
 [![Build-XQDK](https://github.com/Silva6c/chess-dike/actions/workflows/android.yml/badge.svg)](https://github.com/Silva6c/chess-dike/actions/workflows/android.yml)
 [![CodeQL](https://github.com/Silva6c/chess-dike/actions/workflows/codeql.yml/badge.svg)](https://github.com/Silva6c/chess-dike/actions/workflows/codeql.yml)
 [![Release](https://img.shields.io/github/v/release/Silva6c/chess-dike)](https://github.com/Silva6c/chess-dike/releases/latest)

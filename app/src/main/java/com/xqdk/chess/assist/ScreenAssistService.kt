@@ -356,6 +356,11 @@ class ScreenAssistService : Service() {
         initEngine(config.recognizerEngine)
         // 语音提示朗读器（懒初始化 TTS：首次真正要朗读时才绑定系统 TTS 服务）
         voiceSpeaker = VoiceSpeaker(this)
+        // 语音诊断（独立通道）：服务创建一条 + 配置快照；onDestroy 再写一条。
+        // 只记语音链路，不记识别帧/FEN/引擎/性能数据。
+        VoiceDiag.log(this, "服务onCreate",
+            "语音开关=${config.voiceEnabled} 引擎=${config.ttsEngine.ifEmpty { "跟随系统" }} " +
+                "诊断=${config.voiceDiagEnabled}")
     }
 
     override fun onBind(intent: Intent?): IBinder = binder
@@ -2008,6 +2013,8 @@ class ScreenAssistService : Service() {
         // 通知兜底撤除（幂等）：前台路径 stopForeground 已撤；其余一切路径（含
         // 门闩生效前的历史遗漏）在此封死（体检 P1）
         runCatching { getSystemService(NotificationManager::class.java).cancel(NOTIF_ID) }
+        // 语音诊断（独立通道）：服务销毁一条（语音相关，不触碰性能诊断 DiagLogWriter）
+        VoiceDiag.log(this, "服务onDestroy", "释放 TTS 连接")
         // 语音提示：停读并释放系统 TTS 服务连接
         voiceSpeaker?.shutdown()
         voiceSpeaker = null

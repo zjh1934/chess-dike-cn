@@ -463,6 +463,84 @@
                 tools:ignore="HardcodedText" />
         </LinearLayout>
 
+        <!-- 语音试听：用当前选中引擎朗读固定中文，绕过支招条件与去重，验证 TTS 通路 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="语音试听"
+                android:textColor="@color/xq_ink_text"
+                android:textSize="13sp"
+                tools:ignore="HardcodedText" />
+
+            <Button
+                android:id="@+id/btn_voice_test"
+                style="@style/ValueChip"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="试听"
+                tools:ignore="HardcodedText" />
+        </LinearLayout>
+
+        <!-- 导出诊断日志：一键导出语音链路事件为带表头的 md 文件，Toast 显示路径 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="诊断日志"
+                android:textColor="@color/xq_ink_text"
+                android:textSize="13sp"
+                tools:ignore="HardcodedText" />
+
+            <Button
+                android:id="@+id/btn_voice_export"
+                style="@style/ValueChip"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="导出"
+                tools:ignore="HardcodedText" />
+        </LinearLayout>
+
+        <!-- 诊断记录开关：默认开；关掉后不写语音诊断日志（与性能诊断完全独立） -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="诊断记录"
+                android:textColor="@color/xq_ink_text"
+                android:textSize="13sp"
+                tools:ignore="HardcodedText" />
+
+            <Button
+                android:id="@+id/btn_voice_diag"
+                style="@style/ValueChip"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="开"
+                tools:ignore="HardcodedText" />
+        </LinearLayout>
+
         <!-- 检查更新：仅手动触发（无启动自检/后台轮询），查 GitHub 正式 stable
              Release 与构建日期比较；结果弹窗/Toast，新版跳 Release 页手动下载 -->
         <LinearLayout

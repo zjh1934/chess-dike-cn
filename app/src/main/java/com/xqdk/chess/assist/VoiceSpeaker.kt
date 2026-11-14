@@ -4,6 +4,8 @@ import android.content.Context
 import android.media.AudioManager
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
+import java.util.Locale
 
 /**
  * 支招结果的语音提示（Android 原生 TextToSpeech，不引入任何第三方 TTS SDK）。
@@ -11,12 +13,18 @@ import android.speech.tts.TextToSpeech
  * 把 [VoicePrompt] 的纯函数决策交给系统 TTS 朗读，并负责：
  * - 异步初始化：TTS 初始化完成前的新结果排队（只保留最新一条），init 成功后补读；
  * - 打断：新着法用 QUEUE_FLUSH 停掉上一段、改读新的一条；
- * - 去重：同一条着法不重复读（[VoicePrompt.moveText] 已剥离成熟度/预判装饰，
- *   「暂定 → 定着」不会让同一着法被读两遍）；
+ * - 去重：同一条着法不重复读（仅在 tts.speak 真正返回 SUCCESS 后才记去重）；
  * - 引擎选择：跟随系统（默认）或设备已安装的指定 TTS 引擎，包名变化时重建实例；
  * - 音量：走 AudioManager.STREAM_MUSIC 媒体流，跟随系统媒体音量，不设额外音量条。
  *
- * 生命周期：由 ScreenAssistService 持有，服务 onDestroy 时 [shutdown]；设置页的引擎
+ * v1.1 修复（支招完全不朗读）：
+ * - onInit 失败不再不可逆：置空 tts、标记失败态，下一条 onSuggestion 会重新 rebuild 重试；
+ * - 初始化成功先 setLanguage(Locale.CHINESE) 并检查返回值，中文缺失再兜底，不放弃朗读；
+ * - 构造/初始化/朗读/出声全过程写独立语音诊断日志（VoiceDiag），错误可见、可自愈。
+ *
+ * 新增 [speakTest]：供设置页用独立实例试听，绕过支招条件与去重，朗读结束自行释放。
+ *
+ * 生命周期：由 ScreenAssistService 持有，服务 onDestroy 时 [shutdown]；设置页引擎
  * 枚举另用一次性 TTS 探测实例、用完即 shutdown。内部状态全部在 synchronized(this)
  * 内访问（renderOverlay 主线程 / 状态复位 worker 线程 / TTS onInit 回调可能并发）。
  */
@@ -34,8 +42,12 @@ class VoiceSpeaker(context: Context) {
     private var gen = 0
     /** 初始化完成前排队的最新一条朗读文本 */
     private var pendingText: String? = null
-    /** 上一次朗读的着法文本（去重） */
+    /** 上一次朗读的着法文本（去重，仅在 speak 返回 SUCCESS 后写入） */
     private var lastSpoken: String? = null
+    /** 最近一次初始化失败：待下一条建议或 [resetDedup] 触发重新 rebuild 重试 */
+    private var initFailed = false
+    /** 试听实例标志：跳过去重、朗读结束（onDone/onError）后自行 shutdown 释放 TTS */
+    private var testMode = false
 
     /**
      * 一条支招结果产生时调用（renderOverlay 内、主线程）。
@@ -58,9 +70,42 @@ class VoiceSpeaker(context: Context) {
         }
     }
 
-    /** 新局面到来：清去重态，允许同一着法在新局面下再次朗读 */
+    /**
+     * 试听：用当前选中引擎朗读一句固定中文，绕过 VoicePrompt 支招条件与去重。
+     * 调用方应使用**独立的** VoiceSpeaker 实例；本实例在朗读结束或初始化/speak
+     * 失败后自行 [shutdown]，避免持有 TTS 服务连接泄漏。
+     */
+    fun speakTest(text: String, engine: String?) {
+        synchronized(this) {
+            if (shuttingDown) return
+            testMode = true
+            VoiceDiag.log(appContext, "试听开始",
+                "engine=${engine?.takeIf { it.isNotEmpty() } ?: "跟随系统"} text=$text")
+            rebuild(engine)               // 复用同一套初始化/构造/日志逻辑
+            if (tts == null) {            // 构造失败：rebuild 已记日志，这里兜底释放
+                shutdown()
+                return
+            }
+            speak(text)                   // 复用 setLanguage(onInit)/speak/返回值检查
+        }
+    }
+
+    /** 新局面到来：清去重态与排队，允许同一着法在新局面下再次朗读；重置失败态以便重试。 */
     fun resetDedup() {
-        synchronized(this) { lastSpoken = null }
+        synchronized(this) {
+            lastSpoken = null
+            pendingText = null
+            if (initFailed) {
+                // 失败态：丢弃半成品实例，下一条建议触发全新 rebuild（onSuggestion→rebuild）
+                runCatching { tts?.shutdown() }
+                tts = null
+                ready = false
+                initFailed = false
+                VoiceDiag.log(appContext, "失败态重置", "下一条建议将重新初始化 TTS")
+            } else {
+                VoiceDiag.log(appContext, "去重复位", "清 lastSpoken/pendingText")
+            }
+        }
     }
 
     /** 组件销毁：停读、释放 TTS 服务连接，之后不再接受朗读 */
@@ -70,6 +115,7 @@ class VoiceSpeaker(context: Context) {
             ready = false
             pendingText = null
             lastSpoken = null
+            initFailed = false
             runCatching { tts?.shutdown() }
             tts = null
         }
@@ -82,6 +128,7 @@ class VoiceSpeaker(context: Context) {
         runCatching { tts?.shutdown() }
         currentEngine = normalized
         ready = false
+        initFailed = false
         gen++
         val myGen = gen
         val listener = TextToSpeech.OnInitListener { status -> onInit(myGen, status) }
@@ -89,33 +136,139 @@ class VoiceSpeaker(context: Context) {
             if (normalized == null) TextToSpeech(appContext, listener)
             else TextToSpeech(appContext, listener, normalized)
         } catch (t: Throwable) {
+            // 构造异常：记诊断日志，绝不静默吞成 null；tts 保持 null，下一条建议可重建重试
+            VoiceDiag.log(appContext, "TTS构造异常", t.toString())
+            initFailed = true
             null
         }
+        VoiceDiag.log(appContext, "TTS实例构造",
+            "engine=${normalized ?: "跟随系统"} 成功=${tts != null}")
     }
 
     private fun onInit(g: Int, status: Int) {
         synchronized(this) {
-            if (g != gen || shuttingDown || status != TextToSpeech.SUCCESS) return
+            if (g != gen || shuttingDown) return   // 迟到/已销毁实例的回调作废
+            if (status != TextToSpeech.SUCCESS) {
+                // 根因①：初始化失败不可逆 → 永久闭环。这里置空 tts、标记失败态，
+                // 使下一条 onSuggestion 的 rebuild 重新构造实例（绝不写 lastSpoken）。
+                VoiceDiag.log(appContext, "onInit失败", "status=$status（下次建议重新初始化）")
+                initFailed = true
+                ready = false
+                runCatching { tts?.shutdown() }
+                tts = null
+                if (testMode) finishTestIfNeeded(g)
+                return
+            }
+            initFailed = false
+            val t = tts
+            if (t == null) {
+                VoiceDiag.log(appContext, "onInit异常", "SUCCESS 但 tts=null")
+                return
+            }
+            VoiceDiag.log(appContext, "onInit", "SUCCESS engine=${currentEngine ?: "跟随系统"}")
+            VoiceDiag.log(appContext, "locale", "默认=${Locale.getDefault()}")
+            // 根因②：朗读前先设中文，检查返回值并记日志；缺数据/不支持再兜底
+            configureLanguage(t)
+            // 根因③：把"到底有没有真的出声"落到硬证据（onStart/onDone/onError）
+            runCatching {
+                t.setOnUtteranceProgressListener(makeProgressListener(g))
+            }.onFailure { VoiceDiag.log(appContext, "listener设置失败", it.toString()) }
             ready = true
             pendingText?.let { p ->
                 pendingText = null
-                runCatching {
-                    tts?.speak(p, TextToSpeech.QUEUE_FLUSH, streamParams(), UTTERANCE_ID)
-                }
+                speak(p)   // 补读：复用 speak（成功后才写 lastSpoken）
             }
         }
     }
 
-    /** 调用方持有 synchronized(this)。 */
+    /**
+     * setLanguage(Locale.CHINESE) 并检查返回值；中文不可用依次尝试
+     * Locale.SIMPLIFIED_CHINESE / Locale.getDefault()，全程写日志，绝不因语言失败放弃朗读。
+     * 调用方持有 synchronized(this)。
+     */
+    private fun configureLanguage(t: TextToSpeech) {
+        var r = runCatching { t.setLanguage(Locale.CHINESE) }
+            .getOrElse { TextToSpeech.LANG_NOT_SUPPORTED }
+        VoiceDiag.log(appContext, "setLanguage", "Locale.CHINESE → ${describeLang(r)}")
+        if (r < 0) {
+            r = runCatching { t.setLanguage(Locale.SIMPLIFIED_CHINESE) }
+                .getOrElse { TextToSpeech.LANG_NOT_SUPPORTED }
+            VoiceDiag.log(appContext, "setLanguage", "Locale.SIMPLIFIED_CHINESE → ${describeLang(r)}")
+        }
+        if (r < 0) {
+            r = runCatching { t.setLanguage(Locale.getDefault()) }
+                .getOrElse { TextToSpeech.LANG_NOT_SUPPORTED }
+            VoiceDiag.log(appContext, "setLanguage", "Locale.getDefault → ${describeLang(r)}")
+        }
+    }
+
+    /** UtteranceProgressListener：API 15+ 可用，onError(String,Int) 自 API 21，minSdk 26 全覆盖。 */
+    private fun makeProgressListener(g: Int) = object : UtteranceProgressListener() {
+        override fun onStart(utteranceId: String?) {
+            onUtterance(g, "onStart", utteranceId ?: "")
+        }
+
+        override fun onDone(utteranceId: String?) {
+            onUtterance(g, "onDone", utteranceId ?: "")
+            finishTestIfNeeded(g)
+        }
+
+        @Suppress("DEPRECATION")
+        override fun onError(utteranceId: String?) {
+            onUtterance(g, "onError(legacy)", utteranceId ?: "")
+            finishTestIfNeeded(g)
+        }
+
+        override fun onError(utteranceId: String?, errorCode: Int) {
+            onUtterance(g, "onError", "code=$errorCode id=${utteranceId ?: ""}")
+            finishTestIfNeeded(g)
+        }
+    }
+
+    /** 回调里不再持有已 shutdown 的实例：gen 变化或 shuttingDown 直接忽略，只写日志。 */
+    private fun onUtterance(g: Int, tag: String, detail: String) {
+        synchronized(this) {
+            if (g != gen || shuttingDown) return
+            VoiceDiag.log(appContext, tag, detail)
+        }
+    }
+
+    /** 试听实例在朗读结束（或初始化/speak 失败）后释放 TTS，避免泄漏。 */
+    private fun finishTestIfNeeded(g: Int) {
+        synchronized(this) {
+            if (g == gen && testMode && !shuttingDown) shutdown()
+        }
+    }
+
+    /** 调用方持有 synchronized(this)。只有 tts.speak 返回 SUCCESS 才写去重。 */
     private fun speak(text: String) {
-        if (text == lastSpoken) return
-        lastSpoken = text
-        val t = tts
-        if (!ready || t == null) {
-            pendingText = text   // 未初始化完成：只保留最新一条
+        if (!testMode && text == lastSpoken) {
+            VoiceDiag.log(appContext, "去重", "跳过重复：$text")
             return
         }
-        runCatching { t.speak(text, TextToSpeech.QUEUE_FLUSH, streamParams(), UTTERANCE_ID) }
+        val t = tts
+        if (!ready || t == null) {
+            // 根因①：排队态只保留最新一条，绝不写 lastSpoken（旧版在此写去重→锁死去重）
+            pendingText = text
+            VoiceDiag.log(appContext, "排队", "未就绪，保留最新：$text")
+            return
+        }
+        VoiceDiag.log(appContext, "打断", "QUEUE_FLUSH 覆盖上一段")
+        val result = try {
+            t.speak(text, TextToSpeech.QUEUE_FLUSH, streamParams(), UTTERANCE_ID)
+        } catch (e: Throwable) {
+            VoiceDiag.log(appContext, "speak异常", e.toString())
+            return
+        }
+        if (result == TextToSpeech.SUCCESS) {
+            lastSpoken = text
+            VoiceDiag.log(appContext, "speak", "SUCCESS：$text")
+        } else {
+            // 根因③：非 SUCCESS 记日志、不写去重，允许下一条建议重试
+            VoiceDiag.log(appContext, "speak失败",
+                "result=$result：$text（不写去重，允许重试）")
+            if (testMode) finishTestIfNeeded(gen)
+        }
     }
 
     /** 调用方持有 synchronized(this)。 */
@@ -123,7 +276,10 @@ class VoiceSpeaker(context: Context) {
         val hadPending = pendingText != null || lastSpoken != null
         pendingText = null
         lastSpoken = null
-        if (hadPending) runCatching { tts?.stop() }
+        if (hadPending) {
+            runCatching { tts?.stop() }
+            VoiceDiag.log(appContext, "开关关闭", "停读并清去重态")
+        }
     }
 
     /** 媒体流：音量跟随系统媒体音量，不设额外音量条 */
@@ -133,5 +289,12 @@ class VoiceSpeaker(context: Context) {
 
     companion object {
         private const val UTTERANCE_ID = "xqdk_voice_prompt"
+
+        private fun describeLang(r: Int): String = when {
+            r == TextToSpeech.LANG_MISSING_DATA -> "LANG_MISSING_DATA"
+            r == TextToSpeech.LANG_NOT_SUPPORTED -> "LANG_NOT_SUPPORTED"
+            r >= 0 -> "OK($r)"
+            else -> "UNKNOWN($r)"
+        }
     }
 }
