@@ -132,50 +132,51 @@ object VoiceDiag {
         }
     }
 
-    companion object {
-        private const val TAG = "VoiceDiag"
+    // 注意：VoiceDiag 本身是 standalone object（单例），Kotlin 不允许在 object 内再
+    // 声明 companion object（"Modifier 'companion' is not applicable inside 'standalone
+    // object'"）。纯函数与常量直接作为 object 成员即可，外部仍以 VoiceDiag.xxx 调用。
+    private const val TAG = "VoiceDiag"
 
-        /** 导出表格表头（三列：时间/标签/详情） */
-        const val TABLE_HEADER = "| 时间 | 标签 | 详情 |\n|---|---|---|\n"
+    /** 导出表格表头（三列：时间/标签/详情） */
+    const val TABLE_HEADER = "| 时间 | 标签 | 详情 |\n|---|---|---|\n"
 
-        private val CLOCK = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
-        private val STAMP = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
-        private val FILE_STAMP = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
+    private val CLOCK = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
+    private val STAMP = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
+    private val FILE_STAMP = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
 
-        /** 单行格式化：纯函数。转义 `|`、压平换行，保证不破坏 Markdown 表格结构。 */
-        fun formatRow(time: String, tag: String, detail: String): String =
-            "| ${esc(time)} | ${esc(tag)} | ${esc(detail)} |\n"
+    /** 单行格式化：纯函数。转义 `|`、压平换行，保证不破坏 Markdown 表格结构。 */
+    fun formatRow(time: String, tag: String, detail: String): String =
+        "| ${esc(time)} | ${esc(tag)} | ${esc(detail)} |\n"
 
-        private fun esc(s: String): String =
-            s.replace("|", "\\|").replace("\r", " ").replace("\n", " ")
+    private fun esc(s: String): String =
+        s.replace("|", "\\|").replace("\r", " ").replace("\n", " ")
 
-        /** 上限裁剪：纯函数，保留最近 limit 行（limit<=0 返回空）。 */
-        fun trimToLimit(rows: List<String>, limit: Int): List<String> {
-            if (limit <= 0) return emptyList()
-            return if (rows.size <= limit) rows
-            else rows.subList(rows.size - limit, rows.size).toList()
-        }
-
-        /** 组装完整导出文档：标题 + 隐私提示 + 设备/版本信息 + 表头 + 全部行（纯函数）。 */
-        fun buildExportDocument(
-            device: String, version: String, sdk: Int, exportTime: String, rows: List<String>
-        ): String {
-            val sb = StringBuilder()
-            sb.append("# XQDK 语音功能诊断\n\n")
-            sb.append("> 隐私提示：本文件仅记录语音提示（TTS）功能链路事件，不含识别帧、FEN、" +
-                    "对局记录或性能数据。\n\n")
-            sb.append("- 设备：$device\n")
-            sb.append("- 版本：$version\n")
-            sb.append("- Android SDK：$sdk\n")
-            sb.append("- 导出时间：$exportTime\n")
-            sb.append("- 记录行数：${rows.size}\n\n")
-            sb.append("## 事件\n\n")
-            sb.append(TABLE_HEADER)
-            rows.forEach { sb.append(it) }
-            return sb.toString()
-        }
-
-        /** 导出文件名（纯函数）。 */
-        fun exportFileName(dateTag: String): String = "XQDK_语音诊断_$dateTag.md"
+    /** 上限裁剪：纯函数，保留最近 limit 行（limit<=0 返回空）。 */
+    fun trimToLimit(rows: List<String>, limit: Int): List<String> {
+        if (limit <= 0) return emptyList()
+        return if (rows.size <= limit) rows
+        else rows.subList(rows.size - limit, rows.size).toList()
     }
+
+    /** 组装完整导出文档：标题 + 隐私提示 + 设备/版本信息 + 表头 + 全部行（纯函数）。 */
+    fun buildExportDocument(
+        device: String, version: String, sdk: Int, exportTime: String, rows: List<String>
+    ): String {
+        val sb = StringBuilder()
+        sb.append("# XQDK 语音功能诊断\n\n")
+        sb.append("> 隐私提示：本文件仅记录语音提示（TTS）功能链路事件，不含识别帧、FEN、" +
+                "对局记录或性能数据。\n\n")
+        sb.append("- 设备：$device\n")
+        sb.append("- 版本：$version\n")
+        sb.append("- Android SDK：$sdk\n")
+        sb.append("- 导出时间：$exportTime\n")
+        sb.append("- 记录行数：${rows.size}\n\n")
+        sb.append("## 事件\n\n")
+        sb.append(TABLE_HEADER)
+        rows.forEach { sb.append(it) }
+        return sb.toString()
+    }
+
+    /** 导出文件名（纯函数）。 */
+    fun exportFileName(dateTag: String): String = "XQDK_语音诊断_$dateTag.md"
 }
