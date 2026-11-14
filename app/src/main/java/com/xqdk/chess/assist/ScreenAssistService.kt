@@ -1383,6 +1383,8 @@ class ScreenAssistService : Service() {
         // attach 前预应用主题（背景/文字色部分路径在 attach 前设置不生效——
         // Cabinet 踩坑教训 ②，addView 后还需 panel.post 二次应用）
         panel.applyTheme(OverlayTheme.fromKey(config.overlayTheme))
+        // 快捷刷新（v1.3）：建窗首帧前回填一次，保证首帧点棋盘行为就与设置一致
+        panel.quickRefreshEnabled = config.quickRefreshEnabled
         panel.setDragHandle(params, wm) {
             // hasOverlayPos 哨兵位：归一化值允许为负（贴边上探挂进状态栏区域），
             // "保存过没有"不能再靠负值判断（2026-11-02 扫描 P1-1）
@@ -1920,6 +1922,8 @@ class ScreenAssistService : Service() {
             }
         }
 
+        // 快捷刷新（v1.3）：每次渲染现读配置：语音设置页热改开关即时生效，无需重启录屏会话
+        panel.quickRefreshEnabled = config.quickRefreshEnabled
         panel.render(OverlayModel(
             stateText = stateText,
             stateKind = stateKind,

@@ -290,5 +290,54 @@
                 tools:ignore="HardcodedText" />
         </LinearLayout>
 
+        <!-- 悬浮窗快捷操作（v1.3）：与语音无关，按用户要求放在本设置页 -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="22dp"
+            android:text="悬浮窗快捷操作"
+            android:textColor="@color/xq_zhu"
+            android:textSize="13sp"
+            android:textStyle="bold"
+            tools:ignore="HardcodedText" />
+
+        <!-- 8. 快捷刷新开关（默认关，文字与默认值一致） -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="快捷刷新"
+                android:textColor="@color/xq_ink_text"
+                android:textSize="13sp"
+                tools:ignore="HardcodedText" />
+
+            <Button
+                android:id="@+id/btn_quick_refresh"
+                style="@style/ValueChip"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="关"
+                tools:ignore="HardcodedText" />
+        </LinearLayout>
+
+        <!-- StepHint 样式默认 maxLines=1 + ellipsize=end，长说明在此显式放开，
+             否则「翻转走子方 / 手动模式不受影响」等关键提示会被截成一行看不到 -->
+        <TextView
+            style="@style/StepHint"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:maxLines="10"
+            android:ellipsize="none"
+            android:text="开启后，点悬浮窗迷你棋盘 = 点右列「更新」按钮：翻转走子方、重建棋局并重新分析（悬浮窗提示「棋局已更新」）。关闭时点棋盘仍是切换候选着法。手动摆棋模式下点棋盘始终用于选子/走子，不受影响。"
+            tools:ignore="HardcodedText" />
+
     </LinearLayout>
 </ScrollView>
