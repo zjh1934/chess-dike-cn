@@ -10,6 +10,15 @@
          （用户主动触发、不自动检查、不内置下载）；识别/引擎/开局库/帮助页全部本地 -->
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- Android 11(API 30)+ 包可见性：设置页用 TextToSpeech.getEngines() 列出设备上
+         已安装的 TTS 引擎（第三方引擎需声明此 intent 才对本应用可见）。非权限声明，
+         不扩张权限清单/网络面/导出组件。 -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+    </queries>
+
     <application
         android:name=".ChessApp"
         android:allowBackup="false"

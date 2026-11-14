@@ -15,6 +15,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
 import android.provider.Settings
+import android.speech.tts.TextToSpeech
 import android.util.TypedValue
 import android.view.View
 import android.widget.Button
@@ -82,6 +83,11 @@ class AssistActivity : AppCompatActivity() {
      *  不随配置重建恢复——弹窗在屏时旋转会被系统强制关闭，冷启动条件又不再成立，
      *  不补弹即静默旁路合规门槛（体检 P1）。未同意 ⇒ 重建后 onResume 补弹。 */
     private var disclaimerAgreed = false
+
+    /** 设置页 TTS 引擎探测实例（仅用于 getEngines() 枚举，回调内即 shutdown 避免泄漏） */
+    private var engineProbe: TextToSpeech? = null
+    /** 语音引擎候选：(显示名, 包名)，首项恒为「跟随系统」(包名="") */
+    private var voiceEngineChoices: List<Pair<String, String>> = listOf("跟随系统" to "")
 
     // 步骤行（①②整行可点，③静态说明行）
     private lateinit var btnOverlay: View
@@ -326,6 +332,54 @@ class AssistActivity : AppCompatActivity() {
             }
         }
 
+        // ---- 语音提示：支一招结果自动朗读（开关）+ TTS 引擎选择 ----
+        // 开关与引擎都写持久化配置；服务在每次建议渲染时现读，设置热改即时生效，
+        // 且不影响支招计算/悬浮窗/连线等任何原有行为。
+        val btnVoice = findViewById<Button>(R.id.btn_voice_prompt)
+        btnVoice.text = if (cfg.voiceEnabled) "开" else "关"
+        btnVoice.setOnClickListener {
+            val on = !cfg.voiceEnabled
+            cfg.voiceEnabled = on
+            btnVoice.text = if (on) "开" else "关"
+        }
+
+        val btnVoiceEngine = findViewById<Button>(R.id.btn_voice_engine)
+        updateVoiceEngineButton(btnVoiceEngine)
+        btnVoiceEngine.setOnClickListener {
+            // 取快照：引擎列表由异步 getEngines() 回调填充，对话框存活期间列表可能被替换，
+            // 若点击时再按新列表索引 which 会错位/越界。
+            val choices = voiceEngineChoices
+            val labels = choices.map { it.first as CharSequence }.toTypedArray()
+            val checked = choices.indexOfFirst { it.second == cfg.ttsEngine }.coerceAtLeast(0)
+            androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle("语音提示引擎")
+                .setSingleChoiceItems(labels, checked) { d, which ->
+                    if (which in choices.indices) cfg.ttsEngine = choices[which].second
+                    updateVoiceEngineButton(btnVoiceEngine)
+                    d.dismiss()
+                }
+                .setNegativeButton("取消", null)
+                .show()
+        }
+        // 异步枚举设备已安装 TTS 引擎（getEngines 在 onInit(SUCCESS) 后取值最稳）；
+        // 一次性探测实例，回调内用完即 shutdown，避免持有 TTS 服务连接。
+        engineProbe = try {
+            TextToSpeech(applicationContext, TextToSpeech.OnInitListener { status ->
+                val probe = engineProbe
+                val installed = ArrayList<TextToSpeech.EngineInfo>()
+                if (status == TextToSpeech.SUCCESS) {
+                    runCatching { probe?.engines?.let { installed.addAll(it) } }
+                }
+                voiceEngineChoices = listOf("跟随系统" to "") +
+                    installed.map { it.label to it.name }
+                runCatching { probe?.shutdown() }
+                engineProbe = null
+                if (!isFinishing && !isDestroyed) updateVoiceEngineButton(btnVoiceEngine)
+            })
+        } catch (t: Throwable) {
+            null
+        }
+
         // bindService 返回值决定是否需要解绑：绑定失败仍置 bound 会在 onDestroy 泄漏连接
         bound = bindService(Intent(this, ScreenAssistService::class.java), connection, Context.BIND_AUTO_CREATE)
 
@@ -410,6 +464,9 @@ class AssistActivity : AppCompatActivity() {
         // 不销毁本页，悬浮窗指导照常存活。
         if (isFinishing) service?.stopGuidance()
         if (bound) unbindService(connection)
+        // 引擎枚举探测实例用完释放（回调未到时由这里兜底 shutdown）
+        runCatching { engineProbe?.shutdown() }
+        engineProbe = null
         super.onDestroy()
     }
 
@@ -461,6 +518,12 @@ class AssistActivity : AppCompatActivity() {
             .setMessage(text)
             .setPositiveButton("我知道了", null)
             .show()
+    }
+
+    /** 语音引擎按钮回填：按持久化的引擎包名找显示名；跟随系统/尚未探测到时显示默认项。 */
+    private fun updateVoiceEngineButton(btn: Button) {
+        val engine = com.xqdk.chess.assist.AssistConfig(this).ttsEngine
+        btn.text = voiceEngineChoices.firstOrNull { it.second == engine }?.first ?: "跟随系统"
     }
 
     /** 文本变化才 setText（1s 轮询不重写视图，避免频跳） */

@@ -104,6 +104,22 @@ class AssistConfig(context: Context) {
         get() = sp.getBoolean(KEY_PRECOMPUTE_ENABLED, true)
         set(value) { sp.edit().putBoolean(KEY_PRECOMPUTE_ENABLED, value).apply() }
 
+    /**
+     * 语音提示开关（默认开）：支一招结果用系统 TTS 朗读着法；关闭后完全不朗读，
+     * 不影响支招计算、悬浮窗、连线等任何原有行为。
+     */
+    var voiceEnabled: Boolean
+        get() = sp.getBoolean(KEY_VOICE_ENABLED, true)
+        set(value) { sp.edit().putBoolean(KEY_VOICE_ENABLED, value).apply() }
+
+    /**
+     * 语音提示引擎：TTS 引擎包名，空串 =「跟随系统」（默认，直接用系统默认 TTS）。
+     * 可选项由设置页 TextToSpeech.getEngines() 列出，选中项持久化。
+     */
+    var ttsEngine: String
+        get() = sp.getString(KEY_TTS_ENGINE, "") ?: ""
+        set(value) { sp.edit().putString(KEY_TTS_ENGINE, value).apply() }
+
     companion object {
         private const val KEY_RECOGNIZER_ENGINE = "recognizer_engine"
         private const val KEY_FRAME_W = "frame_w"
@@ -120,5 +136,7 @@ class AssistConfig(context: Context) {
         private const val KEY_OVERLAY_THEME = "overlay_theme"
         private const val KEY_BENCH_PROFILING = "bench_profiling"
         private const val KEY_PRECOMPUTE_ENABLED = "precompute_enabled"
+        private const val KEY_VOICE_ENABLED = "voice_enabled"
+        private const val KEY_TTS_ENGINE = "tts_engine"
     }
 }

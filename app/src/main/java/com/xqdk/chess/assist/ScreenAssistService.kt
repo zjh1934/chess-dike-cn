@@ -143,6 +143,9 @@ class ScreenAssistService : Service() {
      */
     private val config by lazy { AssistConfig(this) }
 
+    /** 语音提示朗读器（系统 TTS）：支一招建议结果自动朗读；随服务 onDestroy shutdown() */
+    private var voiceSpeaker: VoiceSpeaker? = null
+
     // 跨线程三字段 @Volatile 补标（体检 P2）：写侧跨主线程（startCapture/stopGuidance/
     // onDestroy）与 worker 线程（projectionCallback.onStop），读侧两侧都有——文件头
     // 线程模型不变量"跨线程字段全部 @Volatile"的对齐；引用读写原子 + releaseCapture
@@ -351,6 +354,8 @@ class ScreenAssistService : Service() {
         Log.i(TAG, "yolo detector: ${if (yoloDetector != null) "ready" else "unavailable"}")
         // 识别引擎按持久化配置初始化（默认 ONNX 主力；加载失败自动回退 YOLO）
         initEngine(config.recognizerEngine)
+        // 语音提示朗读器（懒初始化 TTS：首次真正要朗读时才绑定系统 TTS 服务）
+        voiceSpeaker = VoiceSpeaker(this)
     }
 
     override fun onBind(intent: Intent?): IBinder = binder
@@ -1113,6 +1118,8 @@ class ScreenAssistService : Service() {
         // 渲染特征值一并作废：新局面的第一条 info 行必须触发渲染
         lastRenderedDepth = -1
         lastRenderedBest = null
+        // 语音去重态一并清：新局面下同一着法允许再次朗读（worker 线程，VoiceSpeaker 内部同步）
+        voiceSpeaker?.resetDedup()
     }
 
     /** MoveChinese.describe 容错版：解析失败时原样返回 UCCI */
@@ -1935,6 +1942,11 @@ class ScreenAssistService : Service() {
             engineText = if (engineName == ENGINE_ONNX) "ONNX" else "YOLO",
             multiPv = multiPv,
         ))
+        // 语音提示：支一招（multiPv==1）建议结果一生成即交给 TTS 朗读；开关与引擎
+        // 每次从持久化配置现读（设置页热改即时生效），去重/打断/异步排队/引擎重建
+        // 由 VoiceSpeaker 内部负责。关闭或非 1 招/非建议文案时纯函数给出不读，
+        // 不触碰支招计算、悬浮窗、连线等任何原有行为。
+        voiceSpeaker?.onSuggestion(multiPv, config.voiceEnabled, candidateText ?: "", config.ttsEngine)
     }
 
     private fun lineScoreText(line: AnalysisLine): String {
@@ -1996,6 +2008,9 @@ class ScreenAssistService : Service() {
         // 通知兜底撤除（幂等）：前台路径 stopForeground 已撤；其余一切路径（含
         // 门闩生效前的历史遗漏）在此封死（体检 P1）
         runCatching { getSystemService(NotificationManager::class.java).cancel(NOTIF_ID) }
+        // 语音提示：停读并释放系统 TTS 服务连接
+        voiceSpeaker?.shutdown()
+        voiceSpeaker = null
         super.onDestroy()
     }
 

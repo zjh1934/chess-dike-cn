@@ -407,6 +407,62 @@
             android:text="β 测试版：对方思考时提前计算；发热明显可关闭"
             tools:ignore="HardcodedText" />
 
+        <!-- 语音提示：支一招结果自动用系统 TTS 朗读着法（默认开）；关掉后完全不朗读，
+             不影响支招计算/悬浮窗/连线。 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="语音提示"
+                android:textColor="@color/xq_ink_text"
+                android:textSize="13sp"
+                tools:ignore="HardcodedText" />
+
+            <Button
+                android:id="@+id/btn_voice_prompt"
+                style="@style/ValueChip"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="开"
+                tools:ignore="HardcodedText" />
+        </LinearLayout>
+
+        <!-- 语音提示引擎：默认「跟随系统」；列出设备已安装 TTS 引擎供选择，选中项持久化。
+             引擎名可能较长，按钮限宽 + 末尾省略，避免挤压标题。 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="语音提示引擎"
+                android:textColor="@color/xq_ink_text"
+                android:textSize="13sp"
+                tools:ignore="HardcodedText" />
+
+            <Button
+                android:id="@+id/btn_voice_engine"
+                style="@style/ValueChip"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:maxWidth="180dp"
+                android:ellipsize="end"
+                android:text="跟随系统"
+                tools:ignore="HardcodedText" />
+        </LinearLayout>
+
         <!-- 检查更新：仅手动触发（无启动自检/后台轮询），查 GitHub 正式 stable
              Release 与构建日期比较；结果弹窗/Toast，新版跳 Release 页手动下载 -->
         <LinearLayout
