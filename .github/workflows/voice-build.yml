@@ -1,0 +1,66 @@
+# 语音提示分支专用构建：不依赖官方版权资产，不走官方签名门禁。
+#
+# 与 Build-XQDK(android.yml) 的区别：
+#  - 不下载 assets Release 里的 ONNX 模型 / 桔库开局库，也不做 sha256 自检。
+#    这些资产受版权保护不随源码分发；缺失时 App 按 README 约定自动降级
+#    （识别回退 YOLO、连线降级纯引擎），不影响编译与基本使用。
+#  - 不注入官方签名密钥，release 构建由 app/build.gradle.kts 回退 debug 签名，
+#    产物可直接安装，但不能覆盖安装官方签名版。
+#  - 不做 tag 发布、不挂 Release，只上传 artifact 供下载。
+#
+# 触发：push 到 main（常规开发）或手动 workflow_dispatch（补包/重跑）。
+name: Build-Voice
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+env:
+  TZ: Asia/Shanghai
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      # versionCode / versionName 由 git 提交数与 v* 标签派生，需完整历史
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: '0'
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: gradle
+
+      # runner 预装 SDK 未必含 compileSdk 34 与钉定的 NDK 25.1，先接受 license
+      - name: Accept SDK licenses
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
+
+      - name: Unit tests
+        run: bash gradlew :app:testArmv8-dotprodDebugUnitTest --no-daemon --console=plain
+
+      - name: Assemble Release APKs
+        run: bash gradlew assembleArmv8Release assembleArmv8-dotprodRelease --no-daemon --console=plain
+
+      - name: Collect APKs
+        run: |
+          mkdir -p dist
+          find app/build/outputs/apk -name "*.apk" -exec cp {} dist/ \;
+          ls -lh dist
+
+      - name: Upload APK artifacts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: XQDK-voice-apks
+          path: dist/*.apk
+          if-no-files-found: error
