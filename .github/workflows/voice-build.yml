@@ -17,10 +17,21 @@ on:
     paths-ignore:
       - '**/*.md'
       - 'docs/**'
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: '是否发布到 Release 页（填 false 则只构建不发布）'
+        type: string
+        required: false
+        default: 'true'
+      release_tag:
+        description: 'Release 标签名（不以 v 开头，避免触发官方 Build-XQDK 流水线）'
+        type: string
+        required: false
+        default: 'voice-1.0'
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   TZ: Asia/Shanghai
@@ -64,3 +75,30 @@ jobs:
           name: XQDK-voice-apks
           path: dist/*.apk
           if-no-files-found: error
+
+      # 手动触发时在 runner 内直接把 APK 挂到 Release 页，产物不经沙盒中转。
+      # 用 gh release create 而非 tag 推送：避免命中 android.yml 的 tags: ["v*"]。
+      - name: Publish to Release page
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_release == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_TITLE: '象棋迪克 XQDK · 支招语音提示版'
+        run: |
+          set -euo pipefail
+          TAG="${RELEASE_TAG:-voice-1.0}"
+          echo "发布标签: $TAG"
+          echo "产物清单:"
+          ls -lh dist/
+          # 幂等：同名 Release 已存在则先删除旧资产，再重建
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "同名 Release 已存在，删除后重建"
+            gh release delete "$TAG" --yes --cleanup-tag
+          fi
+          gh release create "$TAG" dist/*.apk \
+            --title "$RELEASE_TITLE" \
+            --notes-file docs/RELEASE_VOICE.md \
+            --latest
+          echo "=== Release 资产 ==="
+          gh release view "$TAG" --json tagName,url,assets \
+            --jq '"URL: " + .url, (.assets[] | "  - " + .name + " (" + (.size|tostring) + " bytes)")'
