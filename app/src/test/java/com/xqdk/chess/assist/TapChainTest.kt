@@ -520,8 +520,12 @@ class TapChainTest {
         assertTrue("必须有证书指纹硬门禁", wf.contains("Verify fixed signing certificate") && wf.contains("EXPECTED"))
         assertFalse("绝不能只打印指纹不比对", wf.contains("Print APK signing fingerprints"))
         assertFalse("发布时不能删掉预建标签", wf.contains("--cleanup-tag"))
+        val gradle = readSrc("app/build.gradle.kts")
+        assertTrue("必须读到 build.gradle.kts", gradle.isNotEmpty())
         assertTrue("gradle 的 release 签名配置仍在",
-            readSrc("app/build.gradle.kts").contains("signingConfigs["release"]"))
+            gradle.contains("signingConfigs") &&
+                gradle.contains("cchess.release.2026.jks") &&
+                gradle.contains("CCHES_STORE_PWD"))
         report("签名固定：指纹常量 + CI 显式密钥 + 出包前逐个 APK 比对不一致即失败，杜绝每版换钥匙")
     }
 
