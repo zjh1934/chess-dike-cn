@@ -429,7 +429,8 @@ class TapChainTest {
     fun `v1_13 我方按钮在悬浮面板 不在设置页`() {
         // Gradle 单测 workingDir 可能是仓库根或 app/ 模块，两种都试，读不到就判失败（不假绿）
         fun readSrc(rel: String): String {
-            for (candidate in listOf(rel, rel.removePrefix("app/"))) {
+            // workingDir 可能是 app/ 模块目录，需 ../ 才读得到 docs/ 与 .github/
+            for (candidate in listOf(rel, rel.removePrefix("app/"), "../" + rel)) {
                 val f = java.io.File(candidate)
                 if (f.exists()) return f.readText()
             }
@@ -473,7 +474,8 @@ class TapChainTest {
     @Test
     fun `v1_14 插入点在帧回调 缓存帧每帧无条件刷新`() {
         fun readSrc(rel: String): String {
-            for (candidate in listOf(rel, rel.removePrefix("app/"))) {
+            // workingDir 可能是 app/ 模块目录，需 ../ 才读得到 docs/ 与 .github/
+            for (candidate in listOf(rel, rel.removePrefix("app/"), "../" + rel)) {
                 val f = java.io.File(candidate)
                 if (f.exists()) return f.readText()
             }
@@ -504,7 +506,8 @@ class TapChainTest {
     @Test
     fun `v1_15 签名固定门禁 不允许再出漂移包`() {
         fun readSrc(rel: String): String {
-            for (candidate in listOf(rel, rel.removePrefix("app/"))) {
+            // workingDir 可能是 app/ 模块目录，需 ../ 才读得到 docs/ 与 .github/
+            for (candidate in listOf(rel, rel.removePrefix("app/"), "../" + rel)) {
                 val f = java.io.File(candidate)
                 if (f.exists()) return f.readText()
             }
