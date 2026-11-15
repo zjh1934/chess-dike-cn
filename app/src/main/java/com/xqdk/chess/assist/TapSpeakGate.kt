@@ -1,7 +1,15 @@
 package com.xqdk.chess.assist
 
 /**
- * v1.11：一次点按，只在**定着**时播报一招。纯 JVM、零 Android 依赖，CI 直接对生产逻辑下断言。
+ * v1.16：一次点按，**第一条算出来的着法（箭头画出来）就立刻念**，本轮只念一次。
+ * 纯 JVM、零 Android 依赖，CI 直接对生产逻辑下断言。
+ *
+ * v1.11~v1.15 要求 `mature`（定着 ✓ / 最佳着稳定 1200ms / searchSettled）才念。
+ * 真机用户实测：「箭头都画出来了，他还不给我读出来……算出来就要给我读啊」。
+ * 命中：renderOverlay 在 `line != null && fromIsOurs` 时就画箭头（文案「（暂定）」），
+ * 但播报要等 SUGGEST_STABLE_MS=1200ms，甚至 8 秒兜底 —— 日志里成功会话耗时
+ * 1.4~8.3 秒。这 1.2 秒原本是防「暂定着法横跳乱念」的，可 `alreadySpoke` +
+ * 「会话收场即 WAIT」两条已经能挡住横跳，根本不需要用户干等。
  *
  * ## 真机日志里的「多指挥 / 乱指挥」
  *
@@ -24,7 +32,8 @@ package com.xqdk.chess.assist
  * ## 门控口径
  *
  * - 只在本轮点按会话**等待定着**期间生效；会话收场后一律 WAIT（杜绝残留播报）。
- * - 必须 `mature`（上游 `searchSettled` 或最佳着稳定 ≥1200ms / 开局库命中）才念。
+ * - **不再要求定着**：`suggestionReady`＝本轮第一条通过起点双保险的建议已可展示
+ *   （调用方传 `arrowFrom != null`，即箭头画出来的那一刻）。
  * - 文案必须是建议/开局库/备选，状态文案（「引擎思考中…」）、空文本、警告文本一律不念。
  * - 本轮已播过 → WAIT，保证一次点按最多一招。
  * - 播报总开关关掉 → MUTED（仍然正常收场，只显示不念）。
@@ -43,12 +52,12 @@ object TapSpeakGate {
     fun decide(
         tapAwaitingSettle: Boolean,
         alreadySpoke: Boolean,
-        mature: Boolean,
+        suggestionReady: Boolean,
         text: String?,
         voiceEnabled: Boolean,
     ): Decision {
         if (!tapAwaitingSettle || alreadySpoke) return Decision.WAIT
-        if (!mature) return Decision.WAIT
+        if (!suggestionReady) return Decision.WAIT
         val t = text ?: return Decision.WAIT
         if (!isSuggestion(t)) return Decision.WAIT
         return if (voiceEnabled) Decision.SPEAK else Decision.MUTED

@@ -532,4 +532,61 @@ class TapChainTest {
         report("签名固定：指纹常量 + CI 显式密钥 + 出包前逐个 APK 比对不一致即失败，杜绝每版换钥匙")
     }
 
+    @Test
+    fun `v1_16 算出来就念 箭头画出来不再等定着`() {
+        // 用户实测：「箭头都画出来了，他还不给我读出来……算出来就要给我读啊」
+        // 之前 TapSpeakGate 要求 mature（定着 ✓ / 稳定 1200ms），播报比箭头晚 1.2~8 秒。
+        assertEquals("暂定着法（箭头已画出）也要立刻念", TapSpeakGate.Decision.SPEAK,
+            TapSpeakGate.decide(true, false, true, "建议 炮2平1 (b7a7)（暂定）", true))
+        assertEquals("箭头还没画出来就不念", TapSpeakGate.Decision.WAIT,
+            TapSpeakGate.decide(true, false, false, "引擎思考中…", true))
+        assertEquals("本轮念过就不许再念（横跳防线仍在）", TapSpeakGate.Decision.WAIT,
+            TapSpeakGate.decide(true, true, true, "建议 马8进9 (h9g7) ✓", true))
+        assertEquals("收场后不许残留播报", TapSpeakGate.Decision.WAIT,
+            TapSpeakGate.decide(false, false, true, "建议 车二进四 (h0h4) ✓", true))
+        assertFalse("状态文案不是一招", TapSpeakGate.isSuggestion("引擎思考中…"))
+        report("首着即念：切入点=箭头出现，不等定着 1.2s；alreadySpoke + 收场即 WAIT 仍挡住横跳与残留")
+    }
+
+    @Test
+    fun `v1_16 不合法明细写进日志 不再只报问题数`() {
+        val broken = AssistBoard.clone(AssistBoard.canonicalStart())
+        broken[9][4] = Piece.EMPTY
+        val bad = RecognitionResult(broken, broken, Orientation.STANDARD,
+            AssistBoard.validate(broken), 0, 31, 1.0)
+        val v = TapFrameGate.check(bad, 3)
+        assertFalse(v.accept)
+        assertTrue("必须记下具体哪条不合法", v.detail.isNotBlank())
+        assertTrue("明细里要有帅/将数量异常", v.detail.contains("数量异常"))
+        assertTrue(TapFrameGate.check(null, 3).detail.isNotBlank())
+        assertEquals("", TapFrameGate.check(
+            RecognitionResult(AssistBoard.canonicalStart(), AssistBoard.canonicalStart(),
+                Orientation.STANDARD, emptyList(), 0, 32, 1.0), 3).detail)
+        report("不合法明细：两将照面 / 帅将数量异常 / 子数超限等逐条落日志，排障不用再猜")
+    }
+
+    @Test
+    fun `v1_16 不合法立刻再抓一帧 不叫用户重点`() {
+        fun readSrc(rel: String): String {
+            // workingDir 可能是 app/ 模块目录，需 ../ 才读得到 docs/ 与 .github/
+            for (candidate in listOf(rel, rel.removePrefix("app/"), "../" + rel)) {
+                val f = java.io.File(candidate)
+                if (f.exists()) return f.readText()
+            }
+            return ""
+        }
+        val svc = readSrc("app/src/main/java/com/xqdk/chess/assist/ScreenAssistService.kt")
+        assertTrue("必须读到服务源码", svc.isNotEmpty())
+        assertTrue("要有短窗口重试", svc.contains("TAP_CAPTURE_RETRY_MAX") &&
+            svc.contains("TAP_CAPTURE_RETRY_WINDOW_MS") && svc.contains("private fun retryTapCapture"))
+        assertTrue("失败分支要先重试再收场", svc.contains("retryTapCapture(seq, attempt, why)"))
+        assertTrue("播报切入点改为箭头出现",
+            svc.contains("arrowFrom != null") && svc.contains("TapSpeakGate.decide"))
+        assertFalse("播报绝不能再等定着", svc.contains("tapSessionSpoke, suggestMature"))
+        assertTrue("念完要锁定面板，念的=画的", svc.contains("tapLockedText") &&
+            svc.contains("tapLockedArrowFrom"))
+        assertTrue("仍保留秒级以外的正确性", svc.contains("TapFrameGate.check(result, MIN_RECOGNIZED_PIECES)"))
+        report("点一下 → 抓帧（不合法立即再抓，最多 3 帧/700ms）→ 认准 → 箭头出现 → 立刻念一次 → 锁定画面，5 个节点全通")
+    }
+
 }

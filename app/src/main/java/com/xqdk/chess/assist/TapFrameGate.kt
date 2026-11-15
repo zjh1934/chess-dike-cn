@@ -8,13 +8,17 @@ package com.xqdk.chess.assist
  * 校验，但代价是 3~11 秒延迟。v1.12 把校验**留在单帧路径上**，又快又不认错局面。
  */
 object TapFrameGate {
-    data class Verdict(val accept: Boolean, val reason: String)
+    /** v1.16：detail 记下**具体**哪条不合法（两将照面 / 帅将数量异常 / 子数超限…）。
+     *  之前日志只有「问题数=1」，用户反复点却不知道软件在拦什么，排障全靠猜。 */
+    data class Verdict(val accept: Boolean, val reason: String, val detail: String = "")
 
     fun check(result: RecognitionResult?, minPieces: Int): Verdict {
-        if (result == null) return Verdict(false, "没找到棋盘")
-        if (result.unknownCells > 0) return Verdict(false, "有未识别格")
-        if (result.issues.isNotEmpty()) return Verdict(false, "局面不合法×${result.issues.size}")
-        if (result.recognizedPieces < minPieces) return Verdict(false, "棋子数过少")
+        if (result == null) return Verdict(false, "没找到棋盘", "识别器没返回棋盘")
+        if (result.unknownCells > 0) return Verdict(false, "有未识别格", "未识别格=${result.unknownCells}")
+        if (result.issues.isNotEmpty()) return Verdict(
+            false, "局面不合法×${result.issues.size}", result.issues.joinToString("；"))
+        if (result.recognizedPieces < minPieces) return Verdict(
+            false, "棋子数过少", "认出=${result.recognizedPieces} 门槛=$minPieces")
         return Verdict(true, "单帧合法")
     }
 }
