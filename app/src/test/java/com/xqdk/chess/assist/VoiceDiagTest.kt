@@ -56,7 +56,7 @@ class VoiceDiagTest {
     fun `导出文档含标题设备版本表头与全部行`() {
         val rows = listOf("| t | onInit | SUCCESS |\n", "| t2 | speak | SUCCESS |\n")
         val doc = VoiceDiag.buildExportDocument("Pixel 7", "1.1", 33, "2026-11-15 10:00:00", rows)
-        assertTrue(doc.contains("# XQDK 语音功能诊断"))
+        assertTrue(doc.contains("# XQDK 增强功能诊断"))
         assertTrue(doc.contains("- 设备：Pixel 7"))
         assertTrue(doc.contains("- 版本：1.1"))
         assertTrue(doc.contains("- Android SDK：33"))
@@ -77,7 +77,7 @@ class VoiceDiagTest {
     @Test
     fun `导出文件名格式`() {
         assertEquals(
-            "XQDK_语音诊断_20261115_100000.md",
+            "XQDK_播报诊断_20261115_100000.md",
             VoiceDiag.exportFileName("20261115_100000")
         )
         assertTrue(VoiceDiag.exportFileName("x").endsWith(".md"))

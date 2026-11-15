@@ -202,9 +202,11 @@ object VoiceDiag {
     }
 
     /**
-     * 版本号展示修正（纯函数）：本仓库 tag 是 voice-1.x，而 build.gradle.kts 用
-     * git describe --tags --match "v*" 后 .removePrefix("v")，把 voice-... 的首字母
-     * v 一并削掉变成 oice-...。这里在日志侧补回 v；其余原样返回，不改构建脚本。
+     * 版本号展示修正（纯函数，历史兼容）：v1.4 及更早的标签是 voice-1.x，而旧版
+     * build.gradle.kts 用 git describe --match "v*" 后 removePrefix("v")，把
+     * voice-... 的首字母 v 一并削掉变成 oice-...。这里在日志侧补回 v，让旧设备导出的
+     * 诊断日志仍显示正确版本。v1.5 起标签改用 cn-* 且构建脚本已改为 --match "cn-*"，
+     * 不再产生 oice- 字符串；本函数保留仅为兼容历史日志与既有单测，其余原样返回。
      */
     fun displayVersion(raw: String): String =
         if (raw.startsWith("oice-")) "v$raw" else raw
@@ -221,8 +223,8 @@ object VoiceDiag {
         device: String, version: String, sdk: Int, exportTime: String, rows: List<String>
     ): String {
         val sb = StringBuilder()
-        sb.append("# XQDK 语音功能诊断\n\n")
-        sb.append("> 隐私提示：本文件仅记录语音提示（TTS）功能链路事件，不含识别帧、FEN、" +
+        sb.append("# XQDK 增强功能诊断\n\n")
+        sb.append("> 隐私提示：本文件仅记录播报（TTS）功能链路事件，不含识别帧、FEN、" +
                 "对局记录或性能数据。\n\n")
         sb.append("- 设备：$device\n")
         sb.append("- 版本：$version\n")
@@ -236,5 +238,5 @@ object VoiceDiag {
     }
 
     /** 导出文件名（纯函数）。 */
-    fun exportFileName(dateTag: String): String = "XQDK_语音诊断_$dateTag.md"
+    fun exportFileName(dateTag: String): String = "XQDK_播报诊断_$dateTag.md"
 }

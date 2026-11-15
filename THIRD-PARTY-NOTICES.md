@@ -48,6 +48,23 @@
   发布**；对外分发 APK（含修改版）时须提供完整对应源码并保留版权声明。
 - 自行编译自用不触发对外分发义务。
 
+## 6.1 本分支的修改声明（Modification Notice）
+
+本仓库 `zjh1934/chess-dike-cn`（曾用名 `xqdk-voice`）是 **[Silva6c/chess-dike](https://github.com/Silva6c/chess-dike)**
+（GPL-3.0）的第三方派生分支。按 GPL-3.0 与常见 NOTICE 实践，明确标注：
+
+- **修改事实**：本分支在上游代码基础上新增/修改了中文 TTS 支招播报链路、点按出招
+  识别闸口与四档识别方式、一页式「增强功能」开关台、播报诊断日志、构建期包名锁定与
+  固定签名、以及配套文档与 CI。改动文件清单见 [`docs/DIFFERENTIATION.md`](docs/DIFFERENTIATION.md)，
+  逐版本说明见 [`docs/RELEASE.md`](docs/RELEASE.md)；与上游的版本对照与同步审计见
+  [`UPSTREAM.md`](UPSTREAM.md)。
+- **非官方声明**：不是官方版 / 原版 / 认证版，不使用上游 Logo，不暗示上游背书；
+  与上游作者无隶属关系。代码授权不含商标权，名称仅作事实性「基于 X 修改 / 兼容 X」表述。
+- **同协议**：衍生部分整体以 **GPL-3.0** 发布，根目录 `LICENSE` 为全文；对外分发 APK
+  时提供完整对应源码（本仓库 Release 均附源码链接）。
+- **第三方 NOTICE 保留**：Apache-2.0 / MIT / BSD 等组件的版权声明与 NOTICE 随其源码保留，
+  未因本分支改动而移除；改过的文件以本文件与源码内注释标注。
+
 ## 7. 预编译二进制完整性基线
 
 pikafish 引擎二进制（§1）随仓库分发但无上游版本标注；下表 sha256 为 2026-10-31

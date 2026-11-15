@@ -212,6 +212,14 @@ class ScreenAssistService : Service() {
      */
     @Volatile private var tapSessionActive = false
     @Volatile private var tapSessionDeadline = 0L
+    /**
+     * v1.5「自动识别」档：由 config.tapMode 决定。true 时识别闸口常开，帧循环
+     * 恢复上游连续识别语义（无点按会话、无超时、确认后不收场）。
+     */
+    @Volatile private var autoRecognize = false
+
+    /** 识别闸口：自动档常开；点按档仅在本轮会话内开。 */
+    private fun recognitionActive(): Boolean = autoRecognize || tapSessionActive
 
     @Volatile private var screenChangedSinceRec = true
     /** 帧差签名槽（上帧采样点像素值）：与上帧逐点比较即更新，零分配复用 */
@@ -456,7 +464,9 @@ class ScreenAssistService : Service() {
         // 录屏被系统侧停止再重连这条重启路径原实现会漏，旧局面的预判线不带入新会话
         ponderCache.clear()
         lastPreFen = null
-        // v1.4 新会话从"未点棋盘"的静止态开始：等用户点棋盘才识别
+        // v1.5：按「识别方式」档位决定会话起点。点按档从静止态开始等用户点棋盘；
+        // 自动档由 autoRecognize 常开闸口，不走点按会话/超时逻辑。
+        autoRecognize = TapMode.isAuto(config.tapMode)
         tapSessionActive = false
         tapSessionDeadline = 0L
         // 新会话识别立即放行：清退避/burst/成本历史（旧会话的失败退避不带入）
@@ -539,7 +549,7 @@ class ScreenAssistService : Service() {
             // 绝不进识别管线、不调 pacer、不推理、不支招、不朗读。
             val image = reader.acquireLatestImage() ?: return
             try {
-                if (!tapSessionActive) {
+                if (!recognitionActive()) {
                     consumeIdleFrame(image, markChange = false)
                     return
                 }
@@ -603,17 +613,18 @@ class ScreenAssistService : Service() {
     }
 
     /**
-     * 帧循环兜底 tick：v1.4 起只在点按识别会话内重放 lastFrame 推进多帧确认链；
-     * 会话外（未点棋盘）只按固定周期空转续期，零重放、零识别、零推理。
+     * 帧循环兜底 tick：只在识别闸口开启时重放 lastFrame 推进多帧确认链。
+     * v1.5 点按档 = 本轮会话内重放 + 超时收场；自动档 = 常开重放、无超时；
+     * 未点棋盘（点按档会话外）只按固定周期空转续期，零重放、零识别、零推理。
      */
     private val frameTick = object : Runnable {
         override fun run() {
             // 录屏已释放：不再续期（releaseCapture 的 removeCallbacks 与在途 tick 并发时会重新入队空转）
             if (mediaProjection == null) return
-            if (tapSessionActive) {
-                if (System.currentTimeMillis() > tapSessionDeadline) {
+            if (recognitionActive()) {
+                if (!autoRecognize && System.currentTimeMillis() > tapSessionDeadline) {
                     // 一次点按迟迟确认不了（棋盘被遮挡/识别失败）：收场并提示再点一次，
-                    // 不让帧循环无限期烧 CPU
+                    // 不让帧循环无限期烧 CPU（自动档没有"一次点按"的概念，不检查超时）
                     endTapSession(success = false)
                 } else if (!paused && !manualMode) {
                     val unstable = tracker.unstableStreak > 0
@@ -629,7 +640,7 @@ class ScreenAssistService : Service() {
                 }
             }
             workerHandler.postDelayed(this,
-                if (tapSessionActive && recognizePacer().isBursting()) 150L else FRAME_TICK_MS)
+                if (recognitionActive() && recognizePacer().isBursting()) 150L else FRAME_TICK_MS)
         }
     }
 
@@ -779,9 +790,9 @@ class ScreenAssistService : Service() {
             if (want != engineName) switchEngine(want)
         }
         if (paused || manualMode) return
-        // v1.4：只有点棋盘开启的识别会话内才允许帧进入识别/推理管线；
-        // 会话结束（确认完成或超时）后在途帧一律丢弃，绝不自行再识别一轮。
-        if (!tapSessionActive) return
+        // v1.5：只有识别闸口开启（点按档会话内 / 自动档常开）才允许帧进入识别/推理
+        // 管线；点按会话结束（确认完成或超时）后在途帧一律丢弃，绝不自行再识别一轮。
+        if (!recognitionActive()) return
         // 停稳门槛：画面刚运动过（走子动画/切页过渡）时先等 MOTION_SETTLE_MS 静默
         // 再识别——过渡帧推理出来的是错误局面，白烧一轮还污染确认；常驻闪烁源
         // 导致永远等不到停稳时按 MOTION_SETTLE_MAX_MS 兜底放行（Cabinet 同款）
@@ -1257,7 +1268,7 @@ class ScreenAssistService : Service() {
             if (currentFen.isNotEmpty() && tracker.confirmed != null) {
                 scheduleAnalysis()
             } else {
-                setStatus("待点棋盘")
+                setStatus(if (TapMode.isAuto(config.tapMode)) "自动识别中" else "待点棋盘")
             }
         }
 
@@ -1408,7 +1419,7 @@ class ScreenAssistService : Service() {
         panel.applyTheme(OverlayTheme.fromKey(config.overlayTheme))
         // 快捷刷新（v1.3）：建窗首帧前回填一次，保证首帧点棋盘行为就与设置一致
         panel.quickRefreshEnabled = config.quickRefreshEnabled
-        panel.tapTriggerEnabled = config.tapTriggerEnabled
+        panel.tapMode = config.tapMode
         panel.setDragHandle(params, wm) {
             // hasOverlayPos 哨兵位：归一化值允许为负（贴边上探挂进状态栏区域），
             // "保存过没有"不能再靠负值判断（2026-11-02 扫描 P1-1）
@@ -1472,7 +1483,7 @@ class ScreenAssistService : Service() {
 
     private fun onOverlayAction(action: OverlayAction) {
         when (action) {
-            OverlayAction.TAP_RECOGNIZE -> startTapRecognition()
+            OverlayAction.TAP_SUGGEST -> startTapRecognition()
             OverlayAction.PAUSE -> {
                 paused = !paused
                 setStatus(if (paused) "已停止指导\n点『继续』恢复" else "继续指导")
@@ -1535,6 +1546,8 @@ class ScreenAssistService : Service() {
      * 会话期间允许 frameTick 重放 lastFrame 推进确认链（画面静止不产帧时也能确认）。
      */
     private fun startTapRecognition() {
+        // 自动档闸口已常开，点棋盘不应再叠一层点按会话（超时/收场会互相打架）
+        if (autoRecognize) return
         if (mediaProjection == null) {
             setStatus("录屏未启动\n请回连线页重新开始屏幕识别")
             return
@@ -1879,7 +1892,7 @@ class ScreenAssistService : Service() {
         val (stateText, stateKind) = when {
             manualMode -> "手动模式" to OverlayStateKind.MANUAL
             paused -> "已停止" to OverlayStateKind.IDLE
-            tapSessionActive -> "识别中" to OverlayStateKind.RUNNING
+            recognitionActive() -> "识别中" to OverlayStateKind.RUNNING
             engineErrorText != null -> "引擎异常" to OverlayStateKind.ERROR
             engineReady -> "待点棋盘" to OverlayStateKind.WAITING
             else -> "引擎预热中" to OverlayStateKind.WAITING
@@ -1889,7 +1902,7 @@ class ScreenAssistService : Service() {
         val override = statusOverride ?: statusOverrideText
         val headline = when {
             override != null -> override
-            fen.isEmpty() -> if (tapSessionActive) "识别中" else "点棋盘开始识别"
+            fen.isEmpty() -> if (recognitionActive()) "识别中" else "点棋盘开始识别"
             paused -> "已停止指导"
             myTurn -> "轮到我方走"
             else -> "轮到对方走"
@@ -2003,7 +2016,7 @@ class ScreenAssistService : Service() {
 
         // 快捷刷新（v1.3）：每次渲染现读配置：语音设置页热改开关即时生效，无需重启录屏会话
         panel.quickRefreshEnabled = config.quickRefreshEnabled
-        panel.tapTriggerEnabled = config.tapTriggerEnabled
+        panel.tapMode = config.tapMode
         panel.render(OverlayModel(
             stateText = stateText,
             stateKind = stateKind,
@@ -2108,6 +2121,7 @@ class ScreenAssistService : Service() {
     private fun releaseCapture() {
         tapSessionActive = false
         tapSessionDeadline = 0L
+        autoRecognize = false
         workerHandler.removeCallbacks(frameTick)
         try { virtualDisplay?.release() } catch (e: Exception) { }
         virtualDisplay = null

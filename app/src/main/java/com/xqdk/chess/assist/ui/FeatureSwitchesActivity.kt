@@ -7,12 +7,13 @@ import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.widget.Button
 import android.widget.CheckBox
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import com.xqdk.chess.R
 import com.xqdk.chess.assist.AssistConfig
-import com.xqdk.chess.assist.TapTrigger
+import com.xqdk.chess.assist.TapMode
 import com.xqdk.chess.assist.VoiceDiag
 import com.xqdk.chess.assist.VoicePrompt
 import com.xqdk.chess.assist.VoiceSpeaker
@@ -21,30 +22,30 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * 语音设置页（v1.2）：把 v1.1 主页的 5 个语音入口全部收进独立页面，主页只留一个
- * 「语音设置」入口（少破坏原生布局）。承载：
- * 1 总开关 / 2 引擎单选 / 3 五个「朗读内容」勾选（voiceReadMask） / 4 试听 /
- * 5 诊断记录开关 / 6 导出（SAF 自选路径，失败回落 VoiceDiag.export）/ 7 清空日志。
+ * 增强功能（v1.5 统一开关页）：把本分支相对上游自研的功能**全部集中在一页**，
+ * 每项都有独立开关。取代旧的「语音设置」页（VoiceSettingsActivity）：
  *
- * 全部配置写 AssistConfig（同一 assist_settings），服务每次建议现读，热改即时生效。
- * 导出走 ActivityResultContracts.StartActivityForResult + ACTION_CREATE_DOCUMENT，
- * 无需任何存储权限（SAF Uri 自带授权，targetSdk33 也不需要）。
+ * - 识别方式四档互斥（点按出招 / 点按刷新 / 点按变招 / 自动识别），呈现为四个
+ *   「开/关」按钮，点一档为开、其余自动变关；当前档位的说明文字随选择刷新。
+ * - 自动识别档下的点棋盘行为（点按刷新 开/关）。
+ * - 中文播报：总开关 / 引擎 / 内容多选 / 试听。
+ * - 诊断工具：播报诊断开关 / 自选路径导出 MD / 清空。
+ * - 构建期固定项（包名锁定、固定签名）只读展示，明确不是运行时开关。
+ *
+ * 全部配置写 AssistConfig（同一 assist_settings），服务每次 render 现读，热改即时生效。
  */
-class VoiceSettingsActivity : AppCompatActivity() {
+class FeatureSwitchesActivity : AppCompatActivity() {
 
-    /** TTS 引擎探测实例（仅用于 getEngines() 枚举，回调内即 shutdown 避免泄漏） */
     private var engineProbe: TextToSpeech? = null
-
-    /** 试听用的一次性 VoiceSpeaker（独立于服务实例，朗读结束自释放；onDestroy 兜底） */
     private var voiceTester: VoiceSpeaker? = null
-
-    /** 语音引擎候选：(显示名, 包名)，首项恒为「跟随系统」(包名="") */
     private var voiceEngineChoices: List<Pair<String, String>> = listOf("跟随系统" to "")
 
     private lateinit var cfg: AssistConfig
-
-    /** 5 个朗读内容勾选框 → 对应 Category */
     private lateinit var readCheckBoxes: List<Pair<CheckBox, VoicePrompt.Category>>
+
+    /** 四档互斥按钮 → 档位值，统一回填「开/关」 */
+    private lateinit var modeButtons: List<Pair<Button, String>>
+    private lateinit var modeHint: TextView
 
     private val exportLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -52,37 +53,69 @@ class VoiceSettingsActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.voice_settings)
+        setContentView(R.layout.feature_switches)
         cfg = AssistConfig(applicationContext)
 
-        findViewById<Button>(R.id.btn_voice_back).setOnClickListener { finish() }
+        findViewById<Button>(R.id.btn_fs_back).setOnClickListener { finish() }
 
-        // 1. 语音提示总开关（沿用 v1.1 写法）
+        // ---- 1. 识别方式（四选一互斥） ----
+        modeButtons = listOf(
+            findViewById<Button>(R.id.btn_mode_suggest) to TapMode.TAP_SUGGEST,
+            findViewById<Button>(R.id.btn_mode_refresh) to TapMode.TAP_REFRESH,
+            findViewById<Button>(R.id.btn_mode_candidate) to TapMode.TAP_CANDIDATE,
+            findViewById<Button>(R.id.btn_mode_auto) to TapMode.AUTO,
+        )
+        modeHint = findViewById(R.id.tv_mode_hint)
+        refreshModeButtons()
+        modeButtons.forEach { (btn, mode) ->
+            btn.setOnClickListener {
+                if (cfg.tapMode != mode) {
+                    cfg.tapMode = mode
+                    VoiceDiag.log(applicationContext, "配置变更", "识别方式=${TapMode.labelOf(mode)}")
+                    Toast.makeText(applicationContext,
+                        "识别方式已切换为「${TapMode.labelOf(mode)}」（下次启动识别时生效）",
+                        Toast.LENGTH_SHORT).show()
+                }
+                refreshModeButtons()
+            }
+        }
+
+        // ---- 2. 自动识别档下的点棋盘行为 ----
+        val btnAutoRefresh = findViewById<Button>(R.id.btn_auto_refresh)
+        btnAutoRefresh.text = TapMode.switchText(cfg.quickRefreshEnabled)
+        btnAutoRefresh.setOnClickListener {
+            val on = !cfg.quickRefreshEnabled
+            cfg.quickRefreshEnabled = on
+            btnAutoRefresh.text = TapMode.switchText(on)
+            Toast.makeText(applicationContext,
+                if (on) "自动识别档：点棋盘＝点按刷新" else "自动识别档：点棋盘＝点按变招",
+                Toast.LENGTH_SHORT).show()
+        }
+
+        // ---- 3. 中文播报：总开关 ----
         val btnEnabled = findViewById<Button>(R.id.btn_voice_enabled)
-        btnEnabled.text = if (cfg.voiceEnabled) "开" else "关"
+        btnEnabled.text = TapMode.switchText(cfg.voiceEnabled)
         btnEnabled.setOnClickListener {
             val on = !cfg.voiceEnabled
             cfg.voiceEnabled = on
-            val state = if (on) "开" else "关"
+            val state = TapMode.switchText(on)
             btnEnabled.text = state
-            VoiceDiag.log(applicationContext, "配置变更", "语音提示=$state")
+            VoiceDiag.log(applicationContext, "配置变更", "支招播报=$state")
         }
 
-        // 2. 语音提示引擎（沿用 v1.1：getEngines 枚举 + setSingleChoiceItems + 探测实例即 shutdown）
+        // ---- 4. 播报引擎 ----
         val btnEngine = findViewById<Button>(R.id.btn_voice_engine)
         updateVoiceEngineButton(btnEngine)
         btnEngine.setOnClickListener {
-            // 取快照：引擎列表由异步 getEngines() 回调填充，对话框存活期间列表可能被替换，
-            // 若点击时再按新列表索引 which 会错位/越界。
             val choices = voiceEngineChoices
             val labels = choices.map { it.first as CharSequence }.toTypedArray()
             val checked = choices.indexOfFirst { it.second == cfg.ttsEngine }.coerceAtLeast(0)
             androidx.appcompat.app.AlertDialog.Builder(this)
-                .setTitle("语音提示引擎")
+                .setTitle("播报引擎")
                 .setSingleChoiceItems(labels, checked) { d, which ->
                     if (which in choices.indices) {
                         cfg.ttsEngine = choices[which].second
-                        VoiceDiag.log(applicationContext, "配置变更", "TTS引擎=${choices[which].first}")
+                        VoiceDiag.log(applicationContext, "配置变更", "播报引擎=${choices[which].first}")
                     }
                     updateVoiceEngineButton(btnEngine)
                     d.dismiss()
@@ -100,8 +133,7 @@ class VoiceSettingsActivity : AppCompatActivity() {
                 voiceEngineChoices = listOf("跟随系统" to "") +
                     installed.map { it.label to it.name }
                 VoiceDiag.log(applicationContext, "引擎枚举",
-                    "onInit=$status 已安装=${installed.size} 列表=" +
-                        installed.joinToString("、") { "${it.label}(${it.name})" }.ifEmpty { "无" })
+                    "onInit=$status 已安装=${installed.size}")
                 runCatching { probe?.shutdown() }
                 engineProbe = null
                 if (!isFinishing && !isDestroyed) updateVoiceEngineButton(btnEngine)
@@ -110,7 +142,7 @@ class VoiceSettingsActivity : AppCompatActivity() {
             null
         }
 
-        // 3. 五个「朗读内容」勾选项：读写 voiceReadMask 位掩码
+        // ---- 5. 播报内容多选（位掩码） ----
         readCheckBoxes = listOf(
             findViewById<CheckBox>(R.id.cb_read_suggestion) to VoicePrompt.Category.SUGGESTION,
             findViewById<CheckBox>(R.id.cb_read_book) to VoicePrompt.Category.BOOK,
@@ -120,35 +152,32 @@ class VoiceSettingsActivity : AppCompatActivity() {
         )
         val mask = cfg.voiceReadMask
         readCheckBoxes.forEach { (cb, cat) ->
-            // 先回填勾选态、再挂监听：避免回填时误触发一次配置写入
             cb.isChecked = ((cat.bit and mask) != 0)
             cb.setOnCheckedChangeListener { _, _ -> onReadMaskChanged() }
         }
 
-        // 4. 试听（沿用 v1.1：独立 VoiceSpeaker.speakTest + onDestroy 释放）
+        // ---- 6. 播报试听 ----
         findViewById<Button>(R.id.btn_voice_test).setOnClickListener {
-            val engineLabel = cfg.ttsEngine.ifEmpty { "跟随系统" }
-            VoiceDiag.log(applicationContext, "试听", "点击试听（引擎=$engineLabel）")
+            VoiceDiag.log(applicationContext, "试听", "点击试听（引擎=${cfg.ttsEngine.ifEmpty { "跟随系统" }}）")
             voiceTester?.shutdown()
             voiceTester = VoiceSpeaker(applicationContext).also {
                 it.speakTest("语音提示正常，炮二平五", cfg.ttsEngine)
             }
         }
 
-        // 5. 诊断记录开关（沿用 v1.1：先写日志再改配置，切到"关"这条也能落盘）
+        // ---- 7. 播报诊断开关 ----
         val btnDiag = findViewById<Button>(R.id.btn_voice_diag)
-        btnDiag.text = if (cfg.voiceDiagEnabled) "开" else "关"
+        btnDiag.text = TapMode.switchText(cfg.voiceDiagEnabled)
         btnDiag.setOnClickListener {
             val on = !cfg.voiceDiagEnabled
-            val state = if (on) "开" else "关"
-            VoiceDiag.log(applicationContext, "配置变更", "诊断记录→$state")
+            VoiceDiag.log(applicationContext, "配置变更", "播报诊断→${TapMode.switchText(on)}")
             cfg.voiceDiagEnabled = on
-            btnDiag.text = state
+            btnDiag.text = TapMode.switchText(on)
         }
 
-        // 6. 导出诊断日志：SAF 自选路径（ACTION_CREATE_DOCUMENT），无需存储权限
+        // ---- 8. 导出播报诊断（SAF 自选路径，无需存储权限） ----
         findViewById<Button>(R.id.btn_voice_export).setOnClickListener {
-            VoiceDiag.log(applicationContext, "导出", "点击导出诊断日志（自选路径）")
+            VoiceDiag.log(applicationContext, "导出", "点击导出播报诊断（自选路径）")
             val dateTag = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
             val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
                 addCategory(Intent.CATEGORY_OPENABLE)
@@ -158,47 +187,36 @@ class VoiceSettingsActivity : AppCompatActivity() {
             try {
                 exportLauncher.launch(intent)
             } catch (t: Throwable) {
-                // 设备无可用文件选择器：直接回落兜底导出
                 VoiceDiag.log(applicationContext, "导出", "选择器启动失败(${t.javaClass.simpleName}) 回落兜底")
                 fallbackExport()
             }
         }
 
-        // 7. 清空日志（可选）
+        // ---- 9. 清空播报诊断 ----
         findViewById<Button>(R.id.btn_voice_clear).setOnClickListener {
-            VoiceDiag.log(applicationContext, "配置变更", "清空语音诊断日志")
+            VoiceDiag.log(applicationContext, "配置变更", "清空播报诊断日志")
             VoiceDiag.clear()
-            Toast.makeText(applicationContext, "诊断日志已清空", Toast.LENGTH_SHORT).show()
-        }
-
-        // 8. 点按触发识别（v1.4，默认开）：与语音无关，但按用户要求放在本设置页；
-        //    写同一份 assist_settings，服务每次 render 现读，热改即时生效。
-        //    这里只决定"点棋盘是否启动一轮识别"，**没有恢复自动连续识别的开关**。
-        val btnTapTrigger = findViewById<Button>(R.id.btn_quick_refresh)
-        btnTapTrigger.text = TapTrigger.switchText(cfg.tapTriggerEnabled)
-        btnTapTrigger.setOnClickListener {
-            val on = !cfg.tapTriggerEnabled
-            cfg.tapTriggerEnabled = on
-            btnTapTrigger.text = TapTrigger.switchText(on)
-            Toast.makeText(
-                applicationContext,
-                if (on) "点按识别已开启：点悬浮窗棋盘才识别并支招"
-                else "点按识别已关闭：点棋盘改为切换候选/快捷刷新（仍不自动识别）",
-                Toast.LENGTH_SHORT,
-            ).show()
+            Toast.makeText(applicationContext, "播报诊断日志已清空", Toast.LENGTH_SHORT).show()
         }
     }
 
-    /** 勾选变化：重算位掩码、持久化、写「多选配置变更」诊断日志。 */
+    /** 四档互斥回填：当前档「开」、其余「关」，并刷新说明文字。 */
+    private fun refreshModeButtons() {
+        val cur = cfg.tapMode
+        modeButtons.forEach { (btn, mode) ->
+            btn.text = TapMode.switchText(cur == mode)
+        }
+        modeHint.text = TapMode.hintOf(cur)
+    }
+
     private fun onReadMaskChanged() {
         val selected = readCheckBoxes.filter { it.first.isChecked }.map { it.second }.toSet()
         val newMask = VoicePrompt.maskOf(selected)
         cfg.voiceReadMask = newMask
         val names = VoicePrompt.categoriesOf(newMask).joinToString("、") { it.label }.ifEmpty { "无" }
-        VoiceDiag.log(applicationContext, "配置变更", "朗读内容多选=$names mask=$newMask")
+        VoiceDiag.log(applicationContext, "配置变更", "播报内容多选=$names mask=$newMask")
     }
 
-    /** SAF 回调：取消 Toast、写入成功 Toast 目标、异常回落兜底。 */
     private fun onExportResult(resultCode: Int, uri: Uri?) {
         if (isFinishing || isDestroyed) return
         if (resultCode != Activity.RESULT_OK || uri == null) {
@@ -213,14 +231,13 @@ class VoiceSettingsActivity : AppCompatActivity() {
             os.use { it.write(doc.toByteArray(Charsets.UTF_8)) }
             val target = uri.path ?: uri.lastPathSegment ?: "所选位置"
             VoiceDiag.log(applicationContext, "导出", "自选路径：成功 目标=$target")
-            Toast.makeText(applicationContext, "诊断日志已导出：$target", Toast.LENGTH_LONG).show()
+            Toast.makeText(applicationContext, "播报诊断已导出：$target", Toast.LENGTH_LONG).show()
         } catch (t: Throwable) {
             VoiceDiag.log(applicationContext, "导出", "自选路径：失败(${t.javaClass.simpleName}) 回落兜底")
             fallbackExport()
         }
     }
 
-    /** 兜底：写下载目录并 Toast 说明。 */
     private fun fallbackExport() {
         if (isFinishing || isDestroyed) return
         val path = VoiceDiag.export(applicationContext)
@@ -233,16 +250,13 @@ class VoiceSettingsActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
-        // 引擎枚举探测实例用完释放（回调未到时由这里兜底 shutdown）
         runCatching { engineProbe?.shutdown() }
         engineProbe = null
-        // 试听一次性实例兜底释放（正常由朗读结束 onDone/onError 自释放）
         runCatching { voiceTester?.shutdown() }
         voiceTester = null
         super.onDestroy()
     }
 
-    /** 语音引擎按钮回填：按持久化的引擎包名找显示名；跟随系统/尚未探测到时显示默认项。 */
     private fun updateVoiceEngineButton(btn: Button) {
         val engine = cfg.ttsEngine
         btn.text = voiceEngineChoices.firstOrNull { it.second == engine }?.first ?: "跟随系统"

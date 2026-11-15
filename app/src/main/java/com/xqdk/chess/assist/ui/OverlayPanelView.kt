@@ -14,8 +14,7 @@ import android.view.WindowManager
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.xqdk.chess.R
-import com.xqdk.chess.assist.QuickRefresh
-import com.xqdk.chess.assist.TapTrigger
+import com.xqdk.chess.assist.TapMode
 import kotlin.math.abs
 import kotlin.math.max
 
@@ -102,8 +101,8 @@ enum class OverlayAction {
     CYCLE_TIME,
     /** 闪电出着：打断当前搜索，立即采纳当前最优（引擎空闲时 no-op） */
     FLASH_STOP,
-    /** v1.4 点棋盘：启动一轮识别→推理→支招（不点棋盘时全流程静止） */
-    TAP_RECOGNIZE,
+    /** v1.5 点按出招：点棋盘启动一轮识别→推理→支招（不点棋盘时全流程静止） */
+    TAP_SUGGEST,
 }
 
 class OverlayPanelView @JvmOverloads constructor(
@@ -166,16 +165,15 @@ class OverlayPanelView @JvmOverloads constructor(
 
     var onAction: ((OverlayAction) -> Unit)? = null
     /**
-     * 快捷刷新（v1.3，默认开）：开启后点迷你棋盘派发与右列「更新」按钮相同的
-     * FLIP_TURN 动作；由 ScreenAssistService 每次 render 现读配置回填（热改即时生效）。
+     * 「自动识别」档下点棋盘做什么（v1.3 起默认开 = 点按刷新，关 = 点按变招）。
+     * 前三档由 [tapMode] 直接决定，不读此项；由 ScreenAssistService 每次 render 现读回填。
      */
-    var quickRefreshEnabled: Boolean = QuickRefresh.DEFAULT_ENABLED
+    var quickRefreshEnabled: Boolean = true
     /**
-     * 点按触发识别（v1.4，默认开）：开启后点迷你棋盘派发 TAP_RECOGNIZE，
-     * 服务进入一轮识别会话；关闭时退回 v1.3 的快捷刷新/切换候选行为，
-     * 但依然不会自动连续识别。由 ScreenAssistService 每次 render 现读配置回填。
+     * 「识别方式」四选一（v1.5，默认「点按出招」）：见 [TapMode]。
+     * 由 ScreenAssistService 每次 render 现读配置回填，设置页热改即时生效。
      */
-    var tapTriggerEnabled: Boolean = TapTrigger.DEFAULT_ENABLED
+    var tapMode: String = TapMode.DEFAULT
     /** 手动模式：小棋盘点格（canonical x,y），由服务端处理选子/走子/删子 */
     var onCellTap: ((x: Int, y: Int) -> Unit)? = null
     /** 拖动开始/结束（遮挡黄字拖动豁免等） */
@@ -252,18 +250,13 @@ class OverlayPanelView @JvmOverloads constructor(
             }
         }
         chess.onNextCandidate = {
-            // 点按触发识别（v1.4）：默认点棋盘 = 启动一轮识别→推理→支招；
-            // 关闭该开关时退回 v1.3 的快捷刷新/切换候选（仍不会自动连续识别）。
+            // v1.5「识别方式」四选一：点按出招 / 点按刷新 / 点按变招 / 自动识别。
             // manualMode 的点格在 OverlayChessView 内部已截胡，不会走到这里。
-            when (TapTrigger.resolve(tapTriggerEnabled, chess.manualMode)) {
-                TapTrigger.Action.RECOGNIZE -> onAction?.invoke(OverlayAction.TAP_RECOGNIZE)
-                TapTrigger.Action.LEGACY ->
-                    when (QuickRefresh.resolve(quickRefreshEnabled, chess.manualMode)) {
-                        QuickRefresh.TapAction.REFRESH -> onAction?.invoke(OverlayAction.FLIP_TURN)
-                        QuickRefresh.TapAction.NEXT_CANDIDATE -> onAction?.invoke(OverlayAction.CYCLE_CANDIDATE)
-                        QuickRefresh.TapAction.MANUAL_CELL -> Unit
-                    }
-                TapTrigger.Action.NONE -> Unit
+            when (TapMode.resolveAction(tapMode, chess.manualMode, quickRefreshEnabled)) {
+                TapMode.Action.RECOGNIZE -> onAction?.invoke(OverlayAction.TAP_SUGGEST)
+                TapMode.Action.REFRESH -> onAction?.invoke(OverlayAction.FLIP_TURN)
+                TapMode.Action.CANDIDATE -> onAction?.invoke(OverlayAction.CYCLE_CANDIDATE)
+                TapMode.Action.NONE -> Unit
             }
         }
         chess.onCellTap = { x, y -> onCellTap?.invoke(x, y) }

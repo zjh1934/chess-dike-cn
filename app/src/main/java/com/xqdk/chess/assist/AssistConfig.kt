@@ -131,30 +131,42 @@ class AssistConfig(context: Context) {
     /**
      * 语音「朗读内容多选」位掩码（v1.2）：见 VoicePrompt.Category / DEFAULT_MASK。
      * 默认 DEFAULT_MASK = SUGGESTION|BOOK，保持 v1.1「只读建议/开局库着法」。
-     * VoiceSettingsActivity 的 5 个勾选项读写此值，ScreenAssistService 每次建议现读。
+     * FeatureSwitchesActivity 的 5 个勾选项读写此值，ScreenAssistService 每次建议现读。
      */
     var voiceReadMask: Int
         get() = sp.getInt(KEY_VOICE_READ_MASK, VoicePrompt.DEFAULT_MASK)
         set(value) { sp.edit().putInt(KEY_VOICE_READ_MASK, value).apply() }
 
     /**
-     * 快捷刷新（v1.3，默认开）：开启后点悬浮窗迷你棋盘 = 点右列「更新」按钮
-     * （OverlayAction.FLIP_TURN，刷新棋局并重新分析）；关闭时点棋盘恢复切换
-     * 候选着法。手动摆棋模式不受影响。服务每次 render 现读，设置页热改即时生效。
+     * 「识别方式」四选一（v1.5 统一开关页的主项，默认「点按出招」）。
+     * 见 [TapMode]：点按出招 / 点按刷新 / 点按变招 / 自动识别，四档互斥。
+     * 服务每次 render 现读，设置页热改即时生效。
+     *
+     * 旧版本迁移：未存过 tapMode 时，按 v1.4 的「点按识别」开关与 v1.3 的
+     * 「快捷刷新」开关折算成对应档位，老用户升级不会静默回到自动识别。
+     */
+    var tapMode: String
+        get() {
+            val raw = sp.getString(KEY_TAP_MODE, null)
+            if (TapMode.isValid(raw)) return raw!!
+            val legacyTap = sp.getBoolean(LEGACY_KEY_TAP_TRIGGER, true)
+            val legacyRefresh = sp.getBoolean(KEY_QUICK_REFRESH_ENABLED, QuickRefresh.DEFAULT_ENABLED)
+            return when {
+                legacyTap -> TapMode.TAP_SUGGEST
+                legacyRefresh -> TapMode.TAP_REFRESH
+                else -> TapMode.TAP_CANDIDATE
+            }
+        }
+        set(value) { sp.edit().putString(KEY_TAP_MODE, TapMode.normalize(value)).apply() }
+
+    /**
+     * 「自动识别」档下点棋盘做什么（默认开 = 点按刷新，关 = 点按变招）。
+     * 前三档（点按出招/刷新/变招）由 [tapMode] 直接决定，不读此项。
+     * 保留此开关用于兼容 v1.3「快捷刷新」配置，且让自动识别档的手势也可配置。
      */
     var quickRefreshEnabled: Boolean
         get() = sp.getBoolean(KEY_QUICK_REFRESH_ENABLED, QuickRefresh.DEFAULT_ENABLED)
         set(value) { sp.edit().putBoolean(KEY_QUICK_REFRESH_ENABLED, value).apply() }
-
-    /**
-     * 点按触发识别（v1.4，默认开）：开启后只有点悬浮窗迷你棋盘才启动一轮
-     * 识别→推理→支招（不点棋盘 = 零识别、零推理、零支招、零朗读）；关闭时
-     * 点棋盘退回 v1.3 的快捷刷新/切换候选行为，但**依然不会自动连续识别**。
-     * 服务每次 render 现读，设置页热改即时生效。
-     */
-    var tapTriggerEnabled: Boolean
-        get() = sp.getBoolean(KEY_TAP_TRIGGER_ENABLED, TapTrigger.DEFAULT_ENABLED)
-        set(value) { sp.edit().putBoolean(KEY_TAP_TRIGGER_ENABLED, value).apply() }
 
     companion object {
         private const val KEY_RECOGNIZER_ENGINE = "recognizer_engine"
@@ -177,6 +189,8 @@ class AssistConfig(context: Context) {
         private const val KEY_VOICE_DIAG_ENABLED = "voice_diag_enabled"
         private const val KEY_VOICE_READ_MASK = "voice_read_mask"
         private const val KEY_QUICK_REFRESH_ENABLED = "quick_refresh_enabled"
-        private const val KEY_TAP_TRIGGER_ENABLED = "tap_trigger_enabled"
+        private const val KEY_TAP_MODE = "tap_mode"
+        /** v1.4 遗留键，仅用于首次读取时迁移，不再写入 */
+        private const val LEGACY_KEY_TAP_TRIGGER = "tap_trigger_enabled"
     }
 }

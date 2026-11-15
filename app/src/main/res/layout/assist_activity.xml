@@ -407,7 +407,7 @@
             android:text="β 测试版：对方思考时提前计算；发热明显可关闭"
             tools:ignore="HardcodedText" />
 
-        <!-- 语音设置：全部语音功能（开关/引擎/朗读内容多选/试听/诊断/导出）收进独立设置页 -->
+        <!-- 增强功能：本分支所有自研功能的开关集中在独立一页（识别方式/播报/诊断） -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -419,7 +419,7 @@
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:text="语音设置"
+                android:text="增强功能"
                 android:textColor="@color/xq_ink_text"
                 android:textSize="13sp"
                 tools:ignore="HardcodedText" />

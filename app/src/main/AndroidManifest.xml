@@ -33,7 +33,7 @@
             android:screenOrientation="portrait"
             android:exported="false" />
         <activity
-            android:name=".assist.ui.VoiceSettingsActivity"
+            android:name=".assist.ui.FeatureSwitchesActivity"
             android:screenOrientation="portrait"
             android:exported="false" />
         <activity

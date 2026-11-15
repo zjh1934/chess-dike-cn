@@ -1,0 +1,315 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  增强功能（v1.5 统一开关页）：本分支相对上游自研的功能全部集中在这一页，
+  每项都有独立开关；识别方式四档互斥，呈现为四个「开/关」按钮，开一个自动关其余。
+  旧页 voice_settings.xml（语音设置）与散落主页的分支开关一并收编到此页。
+-->
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/xq_paper"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingHorizontal="24dp"
+        android:paddingTop="20dp"
+        android:paddingBottom="28dp">
+
+        <!-- 页头 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="增强功能"
+                android:textColor="@color/xq_ink_text"
+                android:textSize="18sp"
+                android:textStyle="bold"
+                tools:ignore="HardcodedText" />
+
+            <Button
+                android:id="@+id/btn_fs_back"
+                style="@style/ValueChip"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="返回"
+                tools:ignore="HardcodedText" />
+        </LinearLayout>
+
+        <TextView
+            style="@style/StepHint"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:maxLines="6"
+            android:ellipsize="none"
+            android:text="本分支相对上游新增/定制的功能都在这里，每项都有独立开关。改完即时生效（部分项下次启动识别时生效）。"
+            tools:ignore="HardcodedText" />
+
+        <!-- ============ 1. 识别方式（四选一互斥） ============ -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="22dp"
+            android:text="识别方式（四选一）"
+            android:textColor="@color/xq_zhu"
+            android:textSize="13sp"
+            android:textStyle="bold"
+            tools:ignore="HardcodedText" />
+
+        <TextView
+            style="@style/StepHint"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:maxLines="4"
+            android:ellipsize="none"
+            android:text="同一时刻只生效一档：把想要的那一档点成「开」，其余自动变「关」。"
+            tools:ignore="HardcodedText" />
+
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="10dp" android:gravity="center_vertical" android:orientation="horizontal">
+            <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+                android:text="点按出招（默认·省电）" android:textColor="@color/xq_ink_text" android:textSize="13sp"
+                tools:ignore="HardcodedText" />
+            <Button android:id="@+id/btn_mode_suggest" style="@style/ValueChip"
+                android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="开"
+                tools:ignore="HardcodedText" />
+        </LinearLayout>
+
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="8dp" android:gravity="center_vertical" android:orientation="horizontal">
+            <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+                android:text="点按刷新" android:textColor="@color/xq_ink_text" android:textSize="13sp"
+                tools:ignore="HardcodedText" />
+            <Button android:id="@+id/btn_mode_refresh" style="@style/ValueChip"
+                android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="关"
+                tools:ignore="HardcodedText" />
+        </LinearLayout>
+
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="8dp" android:gravity="center_vertical" android:orientation="horizontal">
+            <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+                android:text="点按变招" android:textColor="@color/xq_ink_text" android:textSize="13sp"
+                tools:ignore="HardcodedText" />
+            <Button android:id="@+id/btn_mode_candidate" style="@style/ValueChip"
+                android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="关"
+                tools:ignore="HardcodedText" />
+        </LinearLayout>
+
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="8dp" android:gravity="center_vertical" android:orientation="horizontal">
+            <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+                android:text="自动识别（上游老行为）" android:textColor="@color/xq_ink_text" android:textSize="13sp"
+                tools:ignore="HardcodedText" />
+            <Button android:id="@+id/btn_mode_auto" style="@style/ValueChip"
+                android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="关"
+                tools:ignore="HardcodedText" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/tv_mode_hint"
+            style="@style/StepHint"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:maxLines="10"
+            android:ellipsize="none"
+            android:text="不点棋盘＝零识别、零推理、零支招、零朗读；点一次棋盘＝抓当前画面识别一轮 → 开局库/引擎支招 → 中文播报，确认后立刻收场。最省电，推荐。"
+            tools:ignore="HardcodedText" />
+
+        <!-- ============ 2. 自动识别档下的点棋盘行为 ============ -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="22dp"
+            android:text="自动识别时的点棋盘行为"
+            android:textColor="@color/xq_zhu"
+            android:textSize="13sp"
+            android:textStyle="bold"
+            tools:ignore="HardcodedText" />
+
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="10dp" android:gravity="center_vertical" android:orientation="horizontal">
+            <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+                android:text="点按刷新（关＝点按变招）" android:textColor="@color/xq_ink_text" android:textSize="13sp"
+                tools:ignore="HardcodedText" />
+            <Button android:id="@+id/btn_auto_refresh" style="@style/ValueChip"
+                android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="开"
+                tools:ignore="HardcodedText" />
+        </LinearLayout>
+
+        <TextView
+            style="@style/StepHint"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:maxLines="6"
+            android:ellipsize="none"
+            android:text="仅当「自动识别」档开启时生效；前三档由上面的四选一直接决定，不读此项。"
+            tools:ignore="HardcodedText" />
+
+        <!-- ============ 3. 中文播报 ============ -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="22dp"
+            android:text="中文播报"
+            android:textColor="@color/xq_zhu"
+            android:textSize="13sp"
+            android:textStyle="bold"
+            tools:ignore="HardcodedText" />
+
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="10dp" android:gravity="center_vertical" android:orientation="horizontal">
+            <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+                android:text="支招播报（总开关）" android:textColor="@color/xq_ink_text" android:textSize="13sp"
+                tools:ignore="HardcodedText" />
+            <Button android:id="@+id/btn_voice_enabled" style="@style/ValueChip"
+                android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="开"
+                tools:ignore="HardcodedText" />
+        </LinearLayout>
+
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="8dp" android:gravity="center_vertical" android:orientation="horizontal">
+            <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+                android:text="播报引擎" android:textColor="@color/xq_ink_text" android:textSize="13sp"
+                tools:ignore="HardcodedText" />
+            <Button android:id="@+id/btn_voice_engine" style="@style/ValueChip"
+                android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:maxWidth="180dp" android:ellipsize="end" android:text="跟随系统"
+                tools:ignore="HardcodedText" />
+        </LinearLayout>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="播报内容（勾选哪些读哪些）"
+            android:textColor="@color/xq_zhu"
+            android:textSize="13sp"
+            android:textStyle="bold"
+            tools:ignore="HardcodedText" />
+
+        <TextView
+            style="@style/StepHint"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="只读纯中文着法（去掉界面坐标）；默认只播报支招建议与开局库着法"
+            tools:ignore="HardcodedText" />
+
+        <CheckBox android:id="@+id/cb_read_suggestion" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:layout_marginTop="8dp" android:minHeight="40dp"
+            android:text="支招建议（含备选变招）" android:textColor="@color/xq_ink_text" android:textSize="13sp"
+            tools:ignore="HardcodedText" />
+        <CheckBox android:id="@+id/cb_read_book" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:minHeight="40dp"
+            android:text="开局库着法" android:textColor="@color/xq_ink_text" android:textSize="13sp"
+            tools:ignore="HardcodedText" />
+        <CheckBox android:id="@+id/cb_read_opponent_plan" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:minHeight="40dp"
+            android:text="对方回合预案" android:textColor="@color/xq_ink_text" android:textSize="13sp"
+            tools:ignore="HardcodedText" />
+        <CheckBox android:id="@+id/cb_read_evaluation" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:minHeight="40dp"
+            android:text="态势评估（胜率/优劣势/深度）" android:textColor="@color/xq_ink_text" android:textSize="13sp"
+            tools:ignore="HardcodedText" />
+        <CheckBox android:id="@+id/cb_read_status" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:minHeight="40dp"
+            android:text="状态与异常提示" android:textColor="@color/xq_ink_text" android:textSize="13sp"
+            tools:ignore="HardcodedText" />
+
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="10dp" android:gravity="center_vertical" android:orientation="horizontal">
+            <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+                android:text="播报试听" android:textColor="@color/xq_ink_text" android:textSize="13sp"
+                tools:ignore="HardcodedText" />
+            <Button android:id="@+id/btn_voice_test" style="@style/ValueChip"
+                android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="试听"
+                tools:ignore="HardcodedText" />
+        </LinearLayout>
+
+        <!-- ============ 4. 诊断与工具 ============ -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="22dp"
+            android:text="诊断与工具"
+            android:textColor="@color/xq_zhu"
+            android:textSize="13sp"
+            android:textStyle="bold"
+            tools:ignore="HardcodedText" />
+
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="10dp" android:gravity="center_vertical" android:orientation="horizontal">
+            <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+                android:text="播报诊断记录" android:textColor="@color/xq_ink_text" android:textSize="13sp"
+                tools:ignore="HardcodedText" />
+            <Button android:id="@+id/btn_voice_diag" style="@style/ValueChip"
+                android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="开"
+                tools:ignore="HardcodedText" />
+        </LinearLayout>
+
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="8dp" android:gravity="center_vertical" android:orientation="horizontal">
+            <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+                android:text="导出播报诊断（MD）" android:textColor="@color/xq_ink_text" android:textSize="13sp"
+                tools:ignore="HardcodedText" />
+            <Button android:id="@+id/btn_voice_export" style="@style/ValueChip"
+                android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="导出"
+                tools:ignore="HardcodedText" />
+        </LinearLayout>
+
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="8dp" android:gravity="center_vertical" android:orientation="horizontal">
+            <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+                android:text="清空播报诊断日志" android:textColor="@color/xq_ink_text" android:textSize="13sp"
+                tools:ignore="HardcodedText" />
+            <Button android:id="@+id/btn_voice_clear" style="@style/ValueChip"
+                android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="清空"
+                tools:ignore="HardcodedText" />
+        </LinearLayout>
+
+        <!-- ============ 5. 构建期固定（只读） ============ -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="22dp"
+            android:text="构建期固定（只读·运行时不可关闭）"
+            android:textColor="@color/xq_zhu"
+            android:textSize="13sp"
+            android:textStyle="bold"
+            tools:ignore="HardcodedText" />
+
+        <TextView
+            style="@style/StepHint"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:maxLines="8"
+            android:ellipsize="none"
+            android:text="包名锁定：com.xqdk.chess（CI 有 aapt 门禁）。固定签名：出包用仓库 Secret 里的固定钥匙，各版本可直接覆盖安装。这两项是出包时锁死的，App 内不提供开关，改了会导致无法覆盖升级。"
+            tools:ignore="HardcodedText" />
+
+        <TextView
+            style="@style/StepHint"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="18dp"
+            android:maxLines="8"
+            android:ellipsize="none"
+            android:text="识别引擎 / 思考制式 / 局面预判 / 性能诊断 / 悬浮窗主题属上游原有功能，开关仍在连线主页，未收进本页。"
+            tools:ignore="HardcodedText" />
+
+    </LinearLayout>
+</ScrollView>

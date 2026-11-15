@@ -326,10 +326,11 @@ class AssistActivity : AppCompatActivity() {
             }
         }
 
-        // ---- 语音设置：主页只留一个入口，全部语音功能收进独立 VoiceSettingsActivity ----
-        // （开关/引擎/朗读内容多选/试听/诊断/导出均在该页，少破坏原生布局）
+        // ---- 增强功能：主页只留一个入口，本分支所有自研功能的开关集中在独立
+        //     FeatureSwitchesActivity 一页（识别方式四档 / 中文播报 / 诊断工具）。
+        //     上游原有的识别引擎、思考制式、局面预判、性能诊断、主题仍在本页设置行。
         findViewById<Button>(R.id.btn_voice_settings).setOnClickListener {
-            startActivity(Intent(this, VoiceSettingsActivity::class.java))
+            startActivity(Intent(this, FeatureSwitchesActivity::class.java))
         }
 
         // bindService 返回值决定是否需要解绑：绑定失败仍置 bound 会在 onDestroy 泄漏连接

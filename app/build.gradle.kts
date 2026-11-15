@@ -18,18 +18,18 @@ val gitCommitCount: Int = runCatching {
     }.standardOutput.asText.get().trim().toInt()
 }.getOrDefault(1)
 
-// versionName = 最近可达 v 标签（2026-10-31 起版本制式切语义化 vX.Y[.Z]，stable-*
-// 日期制废弃）的 git describe 结果，去掉前导 v：发布提交上是 "3.2"，标签之后的开发
-// 提交是 "3.2-2-gabc1234"（一眼看出是开发构建）。不手写常量——版本号只由 git 标签
-// 这一个事实源派生（对齐内阁 phone 端同款机制），避免发布版与包内版本各写各的；
-// --match "v*" 同时排除旧制 stable-* 标签不参与派生。无 git/无标签回退占位串
+// versionName = 最近可达 cn-X.Y 标签的 git describe 结果，去掉前缀 cn-：
+// 发布提交上是 "1.5"，标签之后的开发提交是 "1.5-2-gabc1234"。v1.5 起本分支标签
+// 改用 cn- 前缀（不再以 v 开头，避免命中上游 android.yml 的 tags: ["v*"]），
+// 故 --match "cn-*"，同时把历史 voice-1.x / v3.x 标签排除在派生之外。
+// 不手写常量——版本号只由 git 标签这一个事实源派生；无 git/无 cn- 标签回退占位串
 // （配置缓存复用时按 value source 重新求值，与上方 gitCommitCount 同机制）。
 val gitVersionName: String = runCatching {
     providers.exec {
-        commandLine("git", "describe", "--tags", "--match", "v*")
+        commandLine("git", "describe", "--tags", "--match", "cn-*")
         workingDir = rootDir
-    }.standardOutput.asText.get().trim().removePrefix("v")
-}.getOrDefault("0.0.0-dev")
+    }.standardOutput.asText.get().trim().removePrefix("cn-")
+}.getOrDefault("1.5-dev")
 
 // 签名密码自 local.properties（gitignored）读入：CCHES_STORE_PWD / CCHES_KEY_PWD。
 // 2026-10-28 出库改造：密码不再写死在构建脚本、密钥文件不再随 git 分发。
@@ -58,7 +58,7 @@ android {
 
     defaultConfig {
         // v1.4 包名固定（用户拍板）：所有版本一律 com.xqdk.chess，与 v1.3 / 上游官方
-        // 保持同一应用身份。配合 CI 的 applicationId 门禁（voice-build.yml 里 aapt 校验），
+        // 保持同一应用身份。配合 CI 的 applicationId 门禁（cn-build.yml 里 aapt 校验），
         // 任何改动该值都会让构建失败。签名同样固定（DEBUG_KEYSTORE_B64），因此
         // v1.3 → v1.4 及以后各版本之间可直接覆盖安装，无需卸载。
         val FIXED_APPLICATION_ID = "com.xqdk.chess"

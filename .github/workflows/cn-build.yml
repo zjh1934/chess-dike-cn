@@ -1,6 +1,6 @@
-# 语音提示分支专用构建：不依赖官方版权资产，不走官方签名门禁。
+# 国内增强版专用构建：不依赖官方版权资产，不走官方签名门禁。
 #
-# 与 Build-XQDK(android.yml) 的区别：
+# 与上游 Build-XQDK(android.yml) 的区别：
 #  - 不下载 assets Release 里的 ONNX 模型 / 桔库开局库，也不做 sha256 自检。
 #    这些资产受版权保护不随源码分发；缺失时 App 按 README 约定自动降级
 #    （识别回退 YOLO、连线降级纯引擎），不影响编译与基本使用。
@@ -8,9 +8,10 @@
 #    产物可直接安装，但不能覆盖安装官方签名版。
 #  - 手动触发时由 runner 直接把 APK 挂到 Release 页（不经沙盒中转运大文件）；
 #    用 gh release create 而非推送 v* tag，避免命中 android.yml 的 tags: ["v*"]。
+#    本分支标签统一用 cn- 前缀（如 cn-1.5），天然不命中该规则。
 #
 # 触发：push 到 main（常规开发，仅编译+单测+出 artifact）或手动 workflow_dispatch（发布）。
-name: Build-Voice
+name: Build-CN
 
 on:
   push:
@@ -26,10 +27,10 @@ on:
         required: false
         default: 'true'
       release_tag:
-        description: 'Release 标签名（不以 v 开头，避免触发官方 Build-XQDK 流水线）'
+        description: 'Release 标签名（cn- 前缀，不以 v 开头，避免触发上游 Build-XQDK 流水线）'
         type: string
         required: false
-        default: 'voice-1.4'
+        default: 'cn-1.5'
 
 permissions:
   contents: write
@@ -41,7 +42,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      # versionCode / versionName 由 git 提交数与 v* 标签派生，需完整历史
+      # versionCode / versionName 由 git 提交数与 cn-* 标签派生，需完整历史
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -61,8 +62,7 @@ jobs:
       # 固定签名（v1.3 起）：release 无官方密钥时回退 debug 签名，而 debug 签名默认
       # 使用 $HOME/.android/debug.keystore。每次全新 runner 自动生成的该文件导致
       # 各版本签名不一致（覆盖安装冲突，用户被迫卸载重装）。这里用仓库 Secrets 里的
-      # 固定钥匙预置该文件——不改任何上游构建脚本，从本版起所有 APK 签名一致，
-      # 版本之间可直接覆盖安装。
+      # 固定钥匙预置该文件——不改任何上游构建脚本，所有版本签名一致，可直接覆盖安装。
       - name: Restore fixed debug keystore
         env:
           DEBUG_KEYSTORE_B64: ${{ secrets.DEBUG_KEYSTORE_B64 }}
@@ -87,10 +87,8 @@ jobs:
           find app/build/outputs/apk -name "*.apk" -exec cp {} dist/ \;
           ls -lh dist
 
-      # 打印每个 APK 的签名证书 SHA-256 指纹：与固定钥匙指纹一致即证明"签名固定"生效，
-      # 用户核对两版指纹相同即可放心覆盖安装
-      # v1.4 包名固定门禁：任何改动 applicationId 的提交都不得出包
-      # （包名一变就是另一个 App，v1.3 起固定的签名也没法覆盖升级）
+      # v1.4 包名锁定门禁：任何改动 applicationId 的提交都不得出包
+      # （包名一变就是另一个 App，固定签名也没法覆盖升级）
       - name: Verify fixed applicationId
         run: |
           set -euo pipefail
@@ -106,6 +104,8 @@ jobs:
             fi
           done
 
+      # 打印每个 APK 的签名证书 SHA-256 指纹：与本分支固定钥匙指纹一致即证明
+      # "签名固定"生效，用户核对两版指纹相同即可放心覆盖安装
       - name: Print APK signing fingerprints
         run: |
           BT="$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -1)"
@@ -117,21 +117,20 @@ jobs:
       - name: Upload APK artifacts
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: XQDK-voice-apks
+          name: XQDK-cn-apks
           path: dist/*.apk
           if-no-files-found: error
 
       # 手动触发时在 runner 内直接把 APK 挂到 Release 页，产物不经沙盒中转。
-      # 用 gh release create 而非 tag 推送：避免命中 android.yml 的 tags: ["v*"]。
       - name: Publish to Release page
         if: github.event_name == 'workflow_dispatch' && inputs.publish_release == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ inputs.release_tag }}
-          RELEASE_TITLE: '象棋迪克 XQDK · 支招语音提示版 v1.4'
+          RELEASE_TITLE: '象棋迪克 XQDK · 国内增强版 v1.5'
         run: |
           set -euo pipefail
-          TAG="${RELEASE_TAG:-voice-1.4}"
+          TAG="${RELEASE_TAG:-cn-1.5}"
           echo "发布标签: $TAG"
           echo "产物清单:"
           ls -lh dist/
@@ -142,7 +141,7 @@ jobs:
           fi
           gh release create "$TAG" dist/*.apk \
             --title "$RELEASE_TITLE" \
-            --notes-file docs/RELEASE_VOICE.md \
+            --notes-file docs/RELEASE.md \
             --latest
           echo "=== Release 资产 ==="
           gh release view "$TAG" --json tagName,url,assets \
