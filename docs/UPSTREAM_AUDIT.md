@@ -13,7 +13,7 @@
 | --- | --- | --- | --- |
 | `base` | `Silva6c/chess-dike` @ `a0b17f6451` | 169 | **近似派生基线**：v3.1 稳定版发布提交（本仓库 `docs/技术报告.md` 自述 `versionName 3.1`） |
 | `up34` | `Silva6c/chess-dike` @ `v3.4` | 188 | 上游当前正式版，2026-11-14 发布，HEAD `8fd66c94b9` |
-| `ours` | `zjh1934/chess-dike-cn` @ `main` | 190 | 本分支 v1.5 修复版发布提交 `d4937b4` |
+| `ours` | `zjh1934/chess-dike-cn` @ `main` | 190 | 本分支 v1.6 发布线（审计时 `main`，发布标签 `cn-1.6`） |
 
 派生出四组：
 
