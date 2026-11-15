@@ -678,7 +678,7 @@ class ScreenAssistService : Service() {
                     System.currentTimeMillis() > tapSessionDeadline) {
                     // v1.7：单帧直出正常情况下一次识别完立即收场；这里只兜「识别器异常
                     // 卡住」导致闸口关不上，绝不再充当正常流程的 6 秒等待
-                    VoiceDiag.log(this, "点按出招", "识别异常卡住：超过兜底时限，强制收场")
+                    VoiceDiag.log(this@ScreenAssistService, "点按出招", "识别异常卡住：超过兜底时限，强制收场")
                     setStatus("这一帧算得有点久\n再点一次棋盘")
                     endTapSession("识别卡住")
                 } else if (!singleFrameTapActive() && !paused && !manualMode) {
@@ -2344,7 +2344,7 @@ class ScreenAssistService : Service() {
                     paused = true
                     // v1.7：用户常从系统侧手动结束录屏/杀后台，写「系统停止」会误导排障；
                     // 改成中性文案，并单独记一条「录屏停止」事件便于区分来源
-                    VoiceDiag.log(this, "录屏停止",
+                    VoiceDiag.log(this@ScreenAssistService, "录屏停止",
                         "来源=MediaProjection onStop（系统收回或用户在系统侧手动结束录屏）")
                     setStatus("录屏已停止\n可在连线页重新授权启动")
                 }
