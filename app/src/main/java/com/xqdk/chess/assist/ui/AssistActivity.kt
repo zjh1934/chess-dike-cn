@@ -96,6 +96,8 @@ class AssistActivity : AppCompatActivity() {
     private lateinit var stepCaptureChip: TextView
 
     private lateinit var btnStartCapture: Button
+    /** v1.7 主页独立「一键关闭录屏」：只在录屏运行中可用 */
+    private lateinit var btnStopCapture: Button
     private lateinit var btnOverlayTheme: Button
     private lateinit var tvStatus: TextView
 
@@ -204,6 +206,18 @@ class AssistActivity : AppCompatActivity() {
         stepCaptureNum = findViewById(R.id.step_capture_num)
         stepCaptureChip = findViewById(R.id.step_capture_chip)
         btnStartCapture = findViewById(R.id.btn_start_capture)
+        btnStopCapture = findViewById(R.id.btn_stop_capture)
+        btnStopCapture.setOnClickListener {
+            val svc = service
+            if (svc?.isCapturing() != true) {
+                Toast.makeText(this, "录屏未在运行，无需关闭", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            // 与悬浮窗「关闭」、主按钮第二态完全同一条路径：收面板 + 停录屏 + 停服务
+            svc.stopGuidance("主页一键关闭录屏")
+            Toast.makeText(this, "录屏已关闭，识别与悬浮窗均已停止", Toast.LENGTH_SHORT).show()
+            refreshStatus()
+        }
         btnOverlayTheme = findViewById(R.id.btn_overlay_theme)
         tvStatus = findViewById(R.id.tv_auto_status)
         stateDot = findViewById(R.id.state_dot)
@@ -603,6 +617,10 @@ class AssistActivity : AppCompatActivity() {
             if (running) "运行中" else "未启动")
 
         setMainButton(if (running) MainBtnState.RUNNING else MainBtnState.IDLE)
+        // v1.7 一键关闭录屏：只有真在录屏时才可点，避免对着一个没反应的按钮
+        // isInitialized 保护：statusRunnable / onServiceConnected 理论上都晚于 onCreate，
+        // 但周期刷新入口多，防御一次未初始化崩溃
+        if (::btnStopCapture.isInitialized) btnStopCapture.isEnabled = running
 
         if (running) {
             val statusText = svc!!.getStatusText()

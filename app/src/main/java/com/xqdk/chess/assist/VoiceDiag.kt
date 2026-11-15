@@ -23,15 +23,21 @@ import java.util.Locale
  * 记录项：
  * - 配置快照（版本 / 包名 / 识别方式档位 / 各开关 / 播报内容掩码）
  * - 面板动作（点棋盘是否派发到服务、当时档位与闸口状态）
- * - 点按出招会话（启动 / 拒绝原因 / 首帧可用 / 完成 / 超时兜底支招）
- * - 识别闸口（录屏启动 / 释放 / 自动档常开 / 点按档静止态）
- * - 识别帧（丢弃原因去重：闸口关 / 停稳等待 / 节拍器退避 / 引擎未就绪 → 恢复放行）
+ * - 点按出招会话（单帧直出启动 / 拒绝原因 / 首帧可用 / 连点取代 / 异常卡住收场）
+ * - **点按小票**：每次点按一行总账（耗时 / 结果 / 识别次数 / 拦下次数 / 引擎 / 档位）
+ * - **识别结果**：每轮一行（引擎 / 耗时 / 认出没认出 / 合法否 / 失败原因），
+ *   v1.6 只记「这帧为啥被拦」，认出来没有全靠反推
+ * - 识别闸口（录屏启动 / 释放 / 自动档常开 / 点按档静止态）、**录屏停止**（来源区分：
+ *   主页一键关闭 / 悬浮窗关闭 / MediaProjection onStop 手动或系统结束）
+ * - 识别帧（丢弃原因去重：闸口关 / 停稳等待 / 节拍器退避 / 引擎未就绪 → 恢复放行；
+ *   单帧会话内在途帧忽略）
  * - 识别引擎（ONNX 加载成功 / 失败回退 YOLO）
- * - 棋盘确认（SAME_BOARD / NEW_BOARD，不记 FEN 具体内容）
+ * - 棋盘确认（单帧直出 / SAME_BOARD / NEW_BOARD，不记 FEN 具体内容）
  * - 支招调度（开局库 / 预判缓存 / 引擎搜索 / 未就绪）
  * - 中文播报（TTS 构造、引擎枚举、onInit、setLanguage、speak、UtteranceProgress、
  *   去重/排队/打断、试听、播报内容多选决策）
- * - 状态文案（所有 setStatus 变化，去重）、配置变更、服务 onCreate/onDestroy、SAF 导出
+ * - 状态文案（所有 setStatus 变化，去重且带会话/闸口标志）、配置变更、
+ *   服务 onCreate/onDestroy、SAF 导出
  *
  * 隐私边界：只记**功能链路事件与配置状态**，绝不记录识别帧像素、FEN 具体内容、
  * 对局记录、引擎搜索 PV 明细或性能数据——与性能诊断 DiagLogWriter 完全分离、不复用。
@@ -53,7 +59,7 @@ object VoiceDiag {
 
     /** 增强功能诊断模块稳定版本标识（我们自己的版本，不受 git describe 派生干扰）。
      *  常量名沿用 v1.2 的 VOICE_MODULE_VERSION 以兼容既有单测与导出文档字段。 */
-    const val VOICE_MODULE_VERSION = "1.6"
+    const val VOICE_MODULE_VERSION = "1.7"
 
     /** 最近一次 [export] 导出文件路径（成功为可展示路径；失败/未导出为 null） */
     @Volatile
@@ -68,17 +74,57 @@ object VoiceDiag {
     private val entries = ArrayList<Entry>()
 
     /**
-     * 追加一条语音链路事件。连续相同的 tag+detail 只累加计数不新增行（刷屏聚合）。
-     * 追加后即成为可导出状态（写失败不会抛出、不影响朗读主链路）。
+     * v1.7 高频标签跨交错聚合：v1.6 真机日志 614 行里「决策 + 去重」占 61%，
+     * 因为两者交替出现，旧的「连续相同才合并」完全失效。窗口内同 tag+detail
+     * 合并到**已有那一行**并累加 count，导出仍渲染「（连续 N 次）」。
+     * 只合并纯状态类高频事件；点按会话、闸口、识别结果、点按小票、录屏停止等
+     * 关键事件一律逐条保留，排障时间线不受影响。
+     */
+    const val COMPACT_WINDOW_MS = 5000L
+    private val COMPACT_TAGS = setOf("决策", "去重", "状态文案", "识别帧", "排队", "打断")
+    private val lastByTag = HashMap<String, Entry>()
+    private val lastTsByTag = HashMap<String, Long>()
+
+    /** 纯函数供单测：该标签是否走跨交错聚合 */
+    internal fun isCompactTag(tag: String): Boolean = tag in COMPACT_TAGS
+
+    /**
+     * 追加一条功能链路事件。两级刷屏聚合：
+     * 1. 连续相同的 tag+detail 直接累加最后一行（v1.2 原有）；
+     * 2. v1.7 新增：高频标签在 [COMPACT_WINDOW_MS] 窗口内，即使中间夹了别的事件，
+     *    同 tag+detail 也合并回**已有那一行**并累加 count（决策/去重交替刷屏的关键）。
+     * 追加后即成为可导出状态（写失败不会抛出、不影响主链路）。
      */
     fun log(context: Context, tag: String, detail: String) {
         if (!AssistConfig(context).voiceDiagEnabled) return
         val time = synchronized(CLOCK) { CLOCK.format(Date()) }
+        val nowMs = System.currentTimeMillis()
         synchronized(lock) {
             val last = entries.lastOrNull()
             if (last != null && last.tag == tag && last.detail == detail) {
                 // 连续重复：更新时间为最近一次、计数 +1，不新增行
-                entries[entries.size - 1] = last.copy(count = last.count + 1, time = time)
+                val merged = last.copy(count = last.count + 1, time = time)
+                entries[entries.size - 1] = merged
+                if (isCompactTag(tag)) {
+                    lastByTag[tag] = merged
+                    lastTsByTag[tag] = nowMs
+                }
+            } else if (isCompactTag(tag)) {
+                val prev = lastByTag[tag]
+                val idx = if (prev != null) entries.indexOf(prev) else -1
+                if (prev != null && idx >= 0 && prev.tag == tag && prev.detail == detail &&
+                    nowMs - (lastTsByTag[tag] ?: 0L) < COMPACT_WINDOW_MS) {
+                    // 交错重复：合并回原行（该行仍位于首次发生的位置），计数 +1
+                    val merged = prev.copy(count = prev.count + 1, time = time)
+                    entries[idx] = merged
+                    lastByTag[tag] = merged
+                    lastTsByTag[tag] = nowMs
+                } else {
+                    val e = Entry(time, tag, detail, 1)
+                    entries.add(e)
+                    lastByTag[tag] = e
+                    lastTsByTag[tag] = nowMs
+                }
             } else {
                 entries.add(Entry(time, tag, detail, 1))
             }
@@ -93,7 +139,11 @@ object VoiceDiag {
 
     /** 清空当前会话缓冲（不删除已导出的文件） */
     fun clear() {
-        synchronized(lock) { entries.clear() }
+        synchronized(lock) {
+            entries.clear()
+            lastByTag.clear()
+            lastTsByTag.clear()
+        }
     }
 
     /**
@@ -234,8 +284,8 @@ object VoiceDiag {
 
     /** 诊断覆盖说明（纯函数）：写进文档头部与 onCreate 快照，一眼看清这份日志能查什么 */
     fun scopeLine(): String =
-        "点按出招会话 / 识别闸口 / 识别帧丢弃原因 / 识别引擎 / 棋盘确认 / " +
-            "支招调度 / 中文播报 / 状态文案 / 面板动作 / 配置变更 / 导出"
+        "点按出招会话 / 点按小票 / 识别结果 / 识别闸口 / 识别帧丢弃原因 / 识别引擎 / " +
+            "棋盘确认 / 支招调度 / 中文播报 / 状态文案 / 面板动作 / 录屏停止 / 配置变更 / 导出"
 
     /** 文档头部信息区（纯函数）：版本、包名、诊断模块版本、识别方式、覆盖范围 */
     fun metaBlock(ver: String, tapModeLabel: String): String =

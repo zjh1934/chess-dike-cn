@@ -220,6 +220,21 @@
             android:text="开始屏幕识别"
             tools:ignore="HardcodedText" />
 
+        <!-- v1.7：主页独立的「一键关闭录屏」。原来只能靠主按钮第二态「停止指导」
+             （字面上看不出是关录屏）或从系统侧手动结束录屏/杀后台；用户实测找不到
+             关闭入口，故显式放一个，不收进「增强功能」页。 -->
+        <Button
+            android:id="@+id/btn_stop_capture"
+            style="@style/MainButton"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:layout_marginTop="8dp"
+            android:background="@drawable/main_btn_outline_warn"
+            android:enabled="false"
+            android:text="一键关闭录屏 · 停止识别"
+            android:textColor="@color/xq_warn"
+            tools:ignore="HardcodedText" />
+
         <!-- ===== 设置（两项，与现有配置键对应） ===== -->
 
         <TextView
