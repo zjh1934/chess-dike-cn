@@ -26,6 +26,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import com.xqdk.chess.R
+import com.xqdk.chess.assist.CaptureStopGate
 import com.xqdk.chess.assist.ScreenAssistService
 
 /**
@@ -223,7 +224,7 @@ class AssistActivity : AppCompatActivity() {
                 return@setOnClickListener
             }
             // 与悬浮窗「关闭」、主按钮第二态完全同一条路径：收面板 + 停录屏 + 停服务
-            svc.stopGuidance("主页一键关闭录屏")
+            svc!!.stopGuidance("主页一键关闭录屏")
             Toast.makeText(this, "录屏已关闭，识别与悬浮窗均已停止", Toast.LENGTH_SHORT).show()
             refreshStatus()
         }
