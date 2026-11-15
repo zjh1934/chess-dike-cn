@@ -14,7 +14,6 @@ import android.view.WindowManager
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.xqdk.chess.R
-import com.xqdk.chess.assist.QuickRefresh
 import kotlin.math.abs
 import kotlin.math.max
 
@@ -162,11 +161,6 @@ class OverlayPanelView @JvmOverloads constructor(
     private var lastMultiPv = -1
 
     var onAction: ((OverlayAction) -> Unit)? = null
-    /**
-     * 快捷刷新（v1.3，默认关）：开启后点迷你棋盘派发与右列「更新」按钮相同的
-     * FLIP_TURN 动作；由 ScreenAssistService 每次 render 现读配置回填（热改即时生效）。
-     */
-    var quickRefreshEnabled: Boolean = QuickRefresh.DEFAULT_ENABLED
     /** 手动模式：小棋盘点格（canonical x,y），由服务端处理选子/走子/删子 */
     var onCellTap: ((x: Int, y: Int) -> Unit)? = null
     /** 拖动开始/结束（遮挡黄字拖动豁免等） */
@@ -242,17 +236,7 @@ class OverlayPanelView @JvmOverloads constructor(
                 onAction?.invoke(OverlayAction.CLOSE)
             }
         }
-        chess.onNextCandidate = {
-            // 快捷刷新（v1.3）：开关开启时，点棋盘走与右列「更新」按钮完全相同的
-            // onAction(FLIP_TURN) 链路（由服务 post 到 worker 后执行 onOverlayAction）；
-            // 关闭时保持上游「切换候选着法」。manualMode 的点格在 OverlayChessView
-            // 内部已截胡，不会走到这里（MANUAL_CELL 为防御分支，不触发任何动作）。
-            when (QuickRefresh.resolve(quickRefreshEnabled, chess.manualMode)) {
-                QuickRefresh.TapAction.REFRESH -> onAction?.invoke(OverlayAction.FLIP_TURN)
-                QuickRefresh.TapAction.NEXT_CANDIDATE -> onAction?.invoke(OverlayAction.CYCLE_CANDIDATE)
-                QuickRefresh.TapAction.MANUAL_CELL -> Unit
-            }
-        }
+        chess.onNextCandidate = { onAction?.invoke(OverlayAction.CYCLE_CANDIDATE) }
         chess.onCellTap = { x, y -> onCellTap?.invoke(x, y) }
     }
 
