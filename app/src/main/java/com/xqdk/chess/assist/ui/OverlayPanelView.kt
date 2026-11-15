@@ -68,8 +68,10 @@ class OverlayModel(
     /** 时间制时长档值（"3s"，时间制显示）；深度制下为 null → 时间芯片隐藏。
      *  与 [depthText] 互斥（连线页思考制式决定，二者至多一个非 null） */
     val timeText: String? = null,
-    /** 引擎 Hash 档值（"256"） */
-    val hashText: String? = null,
+    /** v1.13：我方颜色（"红"/"黑"），显示在原「哈希」按钮位置 */
+    val mySideText: String = "红",
+    /** true = 用户在悬浮面板上手动锁定（按钮显示「我方✓」） */
+    val mySideLocked: Boolean = false,
     /** 识别引擎档值（"ONNX"/"YOLO"）；null = 显示弱化占位 */
     val engineText: String? = null,
     /** 引擎变招路数（MultiPV 1-3）：左列档位按钮文字 "N变"（默认 1 路算力最全） */
@@ -87,8 +89,8 @@ enum class OverlayAction {
     UNDO,
     /** 引擎深度档切换（固定深度循环） */
     CYCLE_STRENGTH,
-    /** 引擎 Hash 档循环（256→512→1024→2048，与对弈设置同口径） */
-    CYCLE_HASH,
+    /** v1.13 我方 红/黑 互斥切换（原「哈希」按钮位）：点一下切到另一色并锁定 */
+    TOGGLE_MY_SIDE,
     /** 更新棋局（原"轮次"）：翻转"我方/对方"走子方并按新轮次重建/重分析 */
     FLIP_TURN,
     /** 紧急手动模式开关：识别失效时在小棋盘上手工维护局面 */
@@ -122,7 +124,7 @@ class OverlayPanelView @JvmOverloads constructor(
     private val btnClose: TextView
     private val btnStrength: TextView
     private val btnTime: TextView
-    private val btnHash: TextView
+    private val btnMySide: TextView
     private val btnEngine: TextView
     private val btnChange: TextView
     private val btnMultiPv: TextView
@@ -216,7 +218,7 @@ class OverlayPanelView @JvmOverloads constructor(
         btnClose = findViewById(R.id.overlay_btn_close)
         btnStrength = findViewById(R.id.overlay_btn_strength)
         btnTime = findViewById(R.id.overlay_btn_time)
-        btnHash = findViewById(R.id.overlay_btn_hash)
+        btnMySide = findViewById(R.id.overlay_btn_my_side)
         btnEngine = findViewById(R.id.overlay_btn_engine)
         btnChange = findViewById(R.id.overlay_btn_change)
         btnMultiPv = findViewById(R.id.overlay_btn_multipv)
@@ -233,7 +235,7 @@ class OverlayPanelView @JvmOverloads constructor(
         btnTurn.setOnClickListener { onAction?.invoke(OverlayAction.FLIP_TURN) }
         btnStrength.setOnClickListener { onAction?.invoke(OverlayAction.CYCLE_STRENGTH) }
         btnTime.setOnClickListener { onAction?.invoke(OverlayAction.CYCLE_TIME) }
-        btnHash.setOnClickListener { onAction?.invoke(OverlayAction.CYCLE_HASH) }
+        btnMySide.setOnClickListener { onAction?.invoke(OverlayAction.TOGGLE_MY_SIDE) }
         btnEngine.setOnClickListener { onAction?.invoke(OverlayAction.CYCLE_ENGINE) }
         btnMultiPv.setOnClickListener { onAction?.invoke(OverlayAction.CYCLE_MULTIPV) }
         btnFlash.setOnClickListener { onAction?.invoke(OverlayAction.FLASH_STOP) }
@@ -359,7 +361,9 @@ class OverlayPanelView @JvmOverloads constructor(
         btnTime.visibility = if (timeText != null) View.VISIBLE else View.GONE
         setChipText(btnStrength, "深度", depthText)
         setChipText(btnTime, "时间", timeText)
-        setChipText(btnHash, "哈希", model.hashText)
+        // v1.13：这个位置不再是哈希档位，而是「我方 红/黑」互斥按钮。
+        // 哈希保持默认 256MB，不再提供面板切换；锁定时 label 带 ✓ 一眼可辨。
+        setChipText(btnMySide, if (model.mySideLocked) "我方✓" else "我方", model.mySideText)
         setChipText(btnEngine, "引擎", model.engineText)
         val pauseText = if (model.paused) "继续" else "停止"
         if (btnPause.text != pauseText) btnPause.text = pauseText
@@ -411,7 +415,7 @@ class OverlayPanelView @JvmOverloads constructor(
         // 值芯片（每个 view 各取一份 Drawable 实例，禁止共享）
         btnStrength.background = theme.chipBackground(context)
         btnTime.background = theme.chipBackground(context)
-        btnHash.background = theme.chipBackground(context)
+        btnMySide.background = theme.chipBackground(context)
         btnEngine.background = theme.chipBackground(context)
 
         // 动作按钮：停止 = 琥珀警示描边（唯一带语义描边的动作）

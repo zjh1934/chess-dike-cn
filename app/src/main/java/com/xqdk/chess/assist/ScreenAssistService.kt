@@ -411,6 +411,13 @@ class ScreenAssistService : Service() {
      * 「敌我不分」。现在首次建局按朝向定一次后锁死，只有满子新对局才重定。
      */
     @Volatile private var mySideLockedRed: Boolean? = null
+    /**
+     * v1.13：用户在**悬浮面板**上手动锁定的我方颜色（null = 跟随识别）。
+     * 与 mySideLockedRed 的区别：这个是用户说了算，跨对局、跨服务重启都不重定；
+     * 后者是自动判定的「一局锁死」，换盘时靠识别到满 32 子新开局才重定 —— 用户实测
+     * 第一盘黑、第二盘红仍按黑支招，就是后者没被判成新对局。持久化在 config.mySideOverride。
+     */
+    @Volatile private var mySideOverrideRed: Boolean? = null
     @Volatile private var lastAnalysis: AnalysisResult? = null
     @Volatile private var selectedCandidate = 0
 
@@ -428,8 +435,8 @@ class ScreenAssistService : Service() {
     private val strengthLevels = listOf("快速·深度12" to 12, "标准·深度20" to 20, "强劲·深度24" to 24)
     @Volatile private var strengthIndex = 0
     /** 引擎 Hash 档位（与搜索设置同口径）：从 256 起步循环 */
+    /** v1.13：Hash 档位固定默认 256MB，不再提供面板循环（按钮位让给我方 红/黑）。 */
     private val hashLevels = listOf(256, 512, 1024, 2048)
-    @Volatile private var hashIndex = 0
     /** 引擎变招路数（MultiPV 1-3，悬浮窗左列"变招档"按钮循环；默认 1 路算力最全） */
     @Volatile private var multiPv: Int = 1
     /** 时间制时长档位（时间制"时间"芯片循环；与 AnalysisEngine 的 500-30000ms 界一致） */
@@ -458,9 +465,10 @@ class ScreenAssistService : Service() {
         strengthIndex = if (idx >= 0) idx else 1
         if (idx < 0) config.searchDepth = strengthLevels[1].second
         // Hash 档位与持久化设置对齐（从 256 起步循环）
-        val hidx = hashLevels.indexOfFirst { it == config.hashMb }
-        hashIndex = if (hidx >= 0) hidx else 0
-        if (hidx < 0) config.hashMb = hashLevels[0]
+        // v1.13：脏值归位到默认 256MB，面板上不再有切换入口
+        if (config.hashMb !in hashLevels) config.hashMb = hashLevels[0]
+        // v1.13：面板手动锁定的我方颜色跨服务重启保持，不能因为杀后台就丢
+        mySideOverrideRed = UserSideChoice.decode(config.mySideOverride)
         // 变招路数与持久化设置对齐（1-3；1 路算力最全，默认 3 保留候选展示）
         multiPv = config.multiPv
         // 空闲预计算（β）开关对齐持久化配置（默认开；连线页设置行热切换）
@@ -1698,7 +1706,8 @@ class ScreenAssistService : Service() {
             }
             OverlayAction.CYCLE_STRENGTH -> cycleStrength()
             OverlayAction.CYCLE_TIME -> cycleTime()
-            OverlayAction.CYCLE_HASH -> cycleHash()
+            OverlayAction.TOGGLE_MY_SIDE -> toggleMySide()
+            // v1.13：哈希档位保持默认 256MB，不再提供面板循环（cycleHash 已移除）
             OverlayAction.CYCLE_ENGINE -> {
                 // 识别引擎热切换：经 pendingEngine 在 worker 帧循环应用（不在 UI 线程
                 // 释放/加载会话），切换后 tracker 重置、局面重新确认。
@@ -1864,8 +1873,10 @@ class ScreenAssistService : Service() {
             (prev == null || !AssistBoard.equal(prev, result.canonical))
         // 原作者 RecognitionTypes.Orientation：STANDARD=红在屏幕下方；FLIPPED=黑在下方。
         // 下方永远是我方 → 红在下=我方执红，黑在下=我方执黑。单帧即可定，不必「等」。
+        // v1.13：面板手动锁定优先；没锁才走自动判定（含一局锁死、新对局重定）
         val redIsBottom = result.orientation == Orientation.STANDARD
-        val myRed = TapTurnInference.resolveMySide(mySideLockedRed, redIsBottom, isNewGame)
+        val myRed = UserSideChoice.effective(mySideOverrideRed, redIsBottom,
+            isNewGame, mySideLockedRed)
         mySideLockedRed = myRed
         // 点棋盘＝「给我支招」：按我方回合请求，配合 fromIsOurs 双保险，
         // 绝不指挥用户去动对方棋子，也不会判成「轮到对方→不出招」。
@@ -1884,11 +1895,12 @@ class ScreenAssistService : Service() {
         // 预算从「建局完成」起算，不再让前面任何步骤吃掉等定着的时间
         tapSessionDeadline = System.currentTimeMillis() + TAP_SETTLE_TIMEOUT_MS
 
+        val sideSource = if (mySideOverrideRed != null) "悬浮面板手动锁定·跨对局保持"
+            else "屏幕下方·原作者口径（${if (redIsBottom) "红在下" else "黑在下"}）"
         VoiceDiag.log(this, "敌我判定",
-            "我方=${if (myRed) "红" else "黑"}（来源=屏幕下方·原作者口径 " +
-            "${if (redIsBottom) "红在下" else "黑在下"}）按我方回合请求 本局锁定 " +
+            "我方=${if (myRed) "红" else "黑"} 来源=$sideSource 按我方回合请求 " +
             if (isNewGame || prev == null) "首次/新对局重定" else "沿用锁定")
-        logTapChain("③ 局面重建", "已按这一帧建局 → 我方=${if (myRed) "红" else "黑"}（屏幕下方）→ 发起一次支招")
+        logTapChain("③ 局面重建", "已按这一帧建局 → 我方=${if (myRed) "红" else "黑"}（$sideSource）→ 发起一次支招")
         postRender()
         scheduleAnalysis()
         setStatus("棋盘已认准\n正在算这一招…")
@@ -2052,16 +2064,32 @@ class ScreenAssistService : Service() {
         setStatus("引擎强度：$name")
     }
 
-    /** Hash 档位循环（256→512→1024→2048），持久化并对下一次搜索生效 */
-    private fun cycleHash() {
-        hashIndex = (hashIndex + 1) % hashLevels.size
-        val mb = hashLevels[hashIndex]
-        config.hashMb = mb
-        analysisEngine?.setHash(mb)
-        diagLog?.appendEvent("档位", "Hash→${mb}MB")
+    /**
+     * v1.13：悬浮面板点「我方 红/黑」—— 切到另一色并**锁定**。
+     *
+     * 只有一个值，天然互斥：选了黑就不可能同时是红。锁定写进 SharedPreferences，
+     * 跨对局、杀后台重启都保持；自动判定（屏幕下方）和新对局重定都翻不动它。
+     *
+     * 切换后清掉当前建议并提示点棋盘：面板上原先那招是旧颜色算的，留着会误导。
+     * 不在这里立刻重新支招（没有新帧），下一轮点棋盘就按新颜色算。
+     */
+    private fun toggleMySide() {
+        val old = mySideOverrideRed
+        val next = UserSideChoice.toggle(old, mySideIsRed())
+        mySideOverrideRed = next
+        config.mySideOverride = UserSideChoice.encode(next)
+        mySideLockedRed = next
+        resetSuggestionState()
+        val text = if (next) "红" else "黑"
+        VoiceDiag.log(this, "我方选择",
+            "面板点选：我方=$text（手动锁定·跨对局保持）旧=" +
+            (old?.let { if (it) "红" else "黑" } ?: "跟随识别") +
+            " → 新=$text；后续所有点按均按${text}方支招")
+        setStatus("我方已锁定为${text}方\n点棋盘即按${text}方支招")
         postRender()
-        setStatus("引擎 Hash：${mb}MB")
     }
+
+    /** Hash 档位固定默认 256MB（不再提供面板切换）；引擎启动时按 config.hashMb 应用。 */
 
     /** 时间制时长档位循环（1→2→3→5→10→30 秒），持久化并对下一次搜索生效 */
     private fun cycleTime() {
@@ -2113,10 +2141,12 @@ class ScreenAssistService : Service() {
         )
     }
 
-    /** v1.10：我方颜色优先读本局锁定值；没锁过（首次建局前）才回退到屏幕朝向。
-     *  锁定后不再被任何单帧识别结果带翻 —— 这是「敌我不分」的根治。 */
+    /** 我方颜色优先级：面板手动锁定（v1.13，绝对优先，跨对局不翻）
+     *  > 自动判定的一局锁死（v1.10）> 屏幕朝向（原作者口径：红在下＝我方执红）。 */
     private fun mySideIsRed(): Boolean =
-        mySideLockedRed ?: (currentOrientation == Orientation.STANDARD)
+        mySideOverrideRed
+            ?: mySideLockedRed
+            ?: (currentOrientation == Orientation.STANDARD)
 
     @Volatile private var lastStatusText = "未启动"
     /** 状态文案进诊断日志的去重键：只在文案变化时记一行，避免引擎 info 期刷屏 */
@@ -2374,7 +2404,9 @@ class ScreenAssistService : Service() {
             // 思考制式决定深度/时间芯片二选一（互斥：非当前制式的档值为 null → 芯片隐藏）
             depthText = if (!searchModeIsTime) strengthLevels[strengthIndex].second.toString() else null,
             timeText = if (searchModeIsTime) timeLevels[timeIndex].second.let { "${it / 1000}s" } else null,
-            hashText = hashLevels[hashIndex].toString(),
+            // v1.13：原哈希芯片位改成「我方 红/黑」互斥按钮；哈希保持默认不再可点
+            mySideText = if (myRed) "红" else "黑",
+            mySideLocked = mySideOverrideRed != null,
             engineText = if (engineName == ENGINE_ONNX) "ONNX" else "YOLO",
             multiPv = multiPv,
         ))

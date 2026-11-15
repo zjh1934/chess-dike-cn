@@ -61,7 +61,8 @@ class OverlayPanelViewRenderTest {
             mySideIsRed = true,
             mature = true,
             depthText = "20",
-            hashText = "256",
+            mySideText = "红",
+            mySideLocked = true,
             engineText = "ONNX",
             multiPv = 3,
         ))

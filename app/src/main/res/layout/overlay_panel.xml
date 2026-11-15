@@ -188,11 +188,13 @@
             android:text="时间 —"
             android:visibility="gone" />
 
+        <!-- v1.13：原「哈希」芯片改为「我方 红/黑」互斥按钮（不在设置页）。
+             哈希档位保持默认 256MB，不再可点。点击后跨对局保持手动锁定的颜色。 -->
         <TextView
-            android:id="@+id/overlay_btn_hash"
+            android:id="@+id/overlay_btn_my_side"
             style="@style/OverlayChip"
             android:layout_marginTop="2dp"
-            android:text="哈希 —" />
+            android:text="我方 —" />
 
         <!-- 引擎芯片（可点）：显示当前识别引擎（ONNX/YOLO），点击热切换并重新确认 -->
         <TextView

@@ -59,6 +59,12 @@ class AssistConfig(context: Context) {
         get() = sp.getInt(KEY_HASH_MB, 256)
         set(value) { sp.edit().putInt(KEY_HASH_MB, value).apply() }
 
+    /** v1.13 悬浮面板「我方 红/黑」手动锁定：UserSideChoice.AUTO/BLACK/RED。
+     *  **不在设置页暴露**，只在悬浮面板上切换；跨对局、跨服务重启保持。 */
+    var mySideOverride: Int
+        get() = sp.getInt(KEY_MY_SIDE_OVERRIDE, UserSideChoice.AUTO)
+        set(value) { sp.edit().putInt(KEY_MY_SIDE_OVERRIDE, value).apply() }
+
     /**
      * 引擎变招路数（MultiPV，1-3；悬浮窗左列"N变"按钮循环）。
      * 1 路 = 全部算力集中最佳着（最强）；2-3 路附带给备选候选。默认 1（2026-10-30
@@ -191,6 +197,7 @@ class AssistConfig(context: Context) {
         private const val KEY_OVERLAY_POS_SET = "overlay_pos_set"
         private const val KEY_SEARCH_DEPTH = "search_depth"
         private const val KEY_HASH_MB = "hash_mb"
+    private const val KEY_MY_SIDE_OVERRIDE = "my_side_override"
         private const val KEY_MULTI_PV = "multi_pv"
         private const val KEY_SEARCH_MODE = "search_mode"
         private const val KEY_SEARCH_TIME_MS = "search_time_ms"

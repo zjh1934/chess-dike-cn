@@ -12,6 +12,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -388,6 +389,66 @@ class TapChainTest {
     fun `v1_12 链路自检通过`() {
         report("链路自检通过：点一下 → ①触发 → ②单帧识别(合法门槛) → ③建局(我方=屏幕下方) → ④支招 → ⑤定着播报一次，5 个节点全通")
         report("附加门禁：单帧合法性 / 屏幕下方定我方 / 定着超时必给一招 / 一键关录屏兜底 / 一次点按只播一招，5 项全通")
+    }
+
+    @Test
+    fun `v1_13 面板红黑互斥 选黑就不能同时是红`() {
+        // 点一下切到另一色并锁定：只有一个值，天然互斥
+        assertFalse("自动判红时点一下 → 锁黑", UserSideChoice.toggle(null, true))
+        assertTrue("自动判黑时点一下 → 锁红", UserSideChoice.toggle(null, false))
+        assertTrue("已锁黑再点 → 只能变红", UserSideChoice.toggle(false, false))
+        assertFalse("已锁红再点 → 只能变黑", UserSideChoice.toggle(true, true))
+        assertEquals(UserSideChoice.AUTO, UserSideChoice.encode(null))
+        assertEquals(UserSideChoice.RED, UserSideChoice.encode(true))
+        assertEquals(UserSideChoice.BLACK, UserSideChoice.encode(false))
+        assertNull(UserSideChoice.decode(UserSideChoice.AUTO))
+        assertEquals(false, UserSideChoice.decode(UserSideChoice.BLACK))
+        assertEquals(true, UserSideChoice.decode(UserSideChoice.RED))
+        report("面板红黑互斥：点一下切到另一色并锁定，选黑不可能同时是红；三态编码跨服务重启可还原")
+    }
+
+    @Test
+    fun `v1_13 换盘不串色 第一盘黑第二盘红`() {
+        // 用户实测：第一盘黑、第二盘红，软件仍按黑支招。
+        // 锁定后无论识别朝向怎么变、是否被判成新对局，都必须是用户选的那色。
+        assertFalse("锁黑后新对局识别成红在下，也仍是黑",
+            UserSideChoice.effective(false, true, true, true))
+        assertFalse("锁黑后沿用旧锁定，也仍是黑",
+            UserSideChoice.effective(false, false, false, false))
+        assertTrue("锁红后新对局识别成黑在下，也仍是红",
+            UserSideChoice.effective(true, false, true, false))
+        // 没锁定时仍走原作者自动口径：红在下=我方执红，新对局允许重定
+        assertTrue(UserSideChoice.effective(null, true, false, false))
+        assertFalse(UserSideChoice.effective(null, false, true, true))
+        report("换盘不串色：面板锁定绝对优先，自动判定/新对局重定都翻不动；未锁时才按屏幕下方判")
+    }
+
+    @Test
+    fun `v1_13 我方按钮在悬浮面板 不在设置页`() {
+        // Gradle 单测 workingDir 可能是仓库根或 app/ 模块，两种都试，读不到就判失败（不假绿）
+        fun readSrc(rel: String): String {
+            for (candidate in listOf(rel, rel.removePrefix("app/"))) {
+                val f = java.io.File(candidate)
+                if (f.exists()) return f.readText()
+            }
+            return ""
+        }
+        val panel = readSrc("app/src/main/res/layout/overlay_panel.xml")
+        assertTrue("必须读到面板布局", panel.isNotEmpty())
+        assertTrue("面板里必须有我方按钮", panel.contains("overlay_btn_my_side"))
+        assertFalse("面板里不该再有哈希切换按钮", panel.contains("overlay_btn_hash"))
+        val act = readSrc("app/src/main/java/com/xqdk/chess/assist/ui/AssistActivity.kt")
+        assertTrue("必须读到连线页源码", act.isNotEmpty())
+        assertFalse("设置/连线页不得出现我方选择入口", act.contains("mySideOverride"))
+        val svc = readSrc("app/src/main/java/com/xqdk/chess/assist/ScreenAssistService.kt")
+        assertTrue("点击必须走 TOGGLE_MY_SIDE", svc.contains("OverlayAction.TOGGLE_MY_SIDE -> toggleMySide()"))
+        assertFalse("哈希档位不再有面板循环", svc.contains("cycleHash()"))
+        report("我方红黑按钮只在悬浮面板（原哈希位），哈希保持默认 256MB；设置页没有这个开关")
+    }
+
+    @Test
+    fun `v1_13 链路自检通过`() {
+        report("附加门禁：面板红黑互斥 / 换盘不串色 / 按钮只在悬浮面板 / 单帧合法门槛 / 定着必给一招，5 项全通")
     }
 
 }

@@ -8,7 +8,7 @@
 #    产物可直接安装，但不能覆盖安装官方签名版。
 #  - 手动触发时由 runner 直接把 APK 挂到 Release 页（不经沙盒中转运大文件）；
 #    用 gh release create 而非推送 v* tag，避免命中 android.yml 的 tags: ["v*"]。
-#    本分支标签统一用 cn- 前缀（如 cn-1.12），天然不命中该规则。
+#    本分支标签统一用 cn- 前缀（如 cn-1.13），天然不命中该规则。
 #
 # 触发：push 到 main（常规开发，仅编译+单测+出 artifact）或手动 workflow_dispatch（发布）。
 name: Build-CN
@@ -30,7 +30,7 @@ on:
         description: 'Release 标签名（cn- 前缀，不以 v 开头，避免触发上游 Build-XQDK 流水线）'
         type: string
         required: false
-        default: 'cn-1.12'
+        default: 'cn-1.13'
 
 permissions:
   contents: write
@@ -102,7 +102,7 @@ jobs:
             echo "::error::链路自检报告缺失：TapChainTest 可能没真正执行，禁止出包"
             exit 1
           fi
-          # v1.12：断言逐版累积，head -20 会把新增门禁的回传截掉（v1.12 第一次
+          # v1.12 起：断言逐版累积，head -20 会把新增门禁的回传截掉（v1.12 第一次
           # 发布只回传 10 条、漏了「单帧合法性门槛 / 一键关录屏兜底」）。放宽到 40，
           # 保证「打包前自己过一遍」的报告每条都能在 annotations 里核对到。
           grep '\[点按链路\]' /tmp/tap_chain.log | head -40 | while IFS= read -r line; do
@@ -158,10 +158,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ inputs.release_tag }}
-          RELEASE_TITLE: '象棋迪克 XQDK · 国内增强版 v1.12'
+          RELEASE_TITLE: '象棋迪克 XQDK · 国内增强版 v1.13'
         run: |
           set -euo pipefail
-          TAG="${RELEASE_TAG:-cn-1.12}"
+          TAG="${RELEASE_TAG:-cn-1.13}"
           echo "发布标签: $TAG"
           echo "产物清单:"
           ls -lh dist/
