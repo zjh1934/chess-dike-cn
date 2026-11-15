@@ -77,7 +77,7 @@ class VoiceDiagTest {
     @Test
     fun `导出文件名格式`() {
         assertEquals(
-            "XQDK_播报诊断_20261115_100000.md",
+            "XQDK_增强功能诊断_20261115_100000.md",
             VoiceDiag.exportFileName("20261115_100000")
         )
         assertTrue(VoiceDiag.exportFileName("x").endsWith(".md"))
@@ -100,8 +100,37 @@ class VoiceDiagTest {
     }
 
     @Test
-    fun `语音模块版本常量稳定`() {
-        assertEquals("1.2", VoiceDiag.VOICE_MODULE_VERSION)
+    fun `增强功能诊断模块版本常量稳定`() {
+        assertEquals("1.5", VoiceDiag.VOICE_MODULE_VERSION)
+    }
+
+    @Test
+    fun `诊断覆盖范围写明点按出招与支招调度`() {
+        val s = VoiceDiag.scopeLine()
+        assertTrue(s.contains("点按出招会话"))
+        assertTrue(s.contains("识别闸口"))
+        assertTrue(s.contains("识别帧丢弃原因"))
+        assertTrue(s.contains("支招调度"))
+        assertTrue(s.contains("中文播报"))
+    }
+
+    @Test
+    fun `文档头部补包名识别方式与覆盖范围`() {
+        val block = VoiceDiag.metaBlock("1.5", "点按出招")
+        assertTrue(block.contains("- 版本：1.5"))
+        assertTrue(block.contains("- 包名：com.xqdk.chess"))
+        assertTrue(block.contains("- 识别方式：点按出招"))
+        assertTrue(block.contains("- 诊断覆盖："))
+        assertTrue(block.contains("- 诊断模块版本：1.5"))
+    }
+
+    @Test
+    fun `导出文档隐私提示写明覆盖链路且不记敏感内容`() {
+        val doc = VoiceDiag.buildExportDocument("d", "1.5", 36, "ts", emptyList())
+        assertTrue(doc.contains("# XQDK 增强功能诊断"))
+        assertTrue(doc.contains("点按出招会话"))
+        assertTrue(doc.contains("不含识别帧像素"))
+        assertTrue(doc.contains("FEN 具体内容"))
     }
 
     // ===== v1.2 任务5：刷屏聚合纯函数 =====

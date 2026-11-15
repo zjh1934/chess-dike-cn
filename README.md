@@ -7,7 +7,7 @@
 > | **上游原项目** | [Silva6c/chess-dike · 象棋迪克 XQDK](https://github.com/Silva6c/chess-dike)（作者 **Silva6c**）· [上游 Releases](https://github.com/Silva6c/chess-dike/releases) |
 > | **上游许可证** | **GPL-3.0**（见 [LICENSE](LICENSE)）；本分支为衍生版，继承同一许可证、源码保持开源 |
 > | **本分支** | [zjh1934/chess-dike-cn](https://github.com/zjh1934/chess-dike-cn) · **曾用名 `xqdk-voice`**（v1.0~v1.4，2026-11-15 改名，旧 URL 由 GitHub 自动重定向）· 与上游作者无隶属关系 |
-> | **定位** | **可检索的差异化，不是汉化**：点按出招（点棋盘才识别推理支招、不点零功耗）、中文 TTS 支招播报（纯中文着法 / 播报内容多选 / 试听 / 播报诊断导出）、一页式「增强功能」开关台、包名锁定 + 固定签名可直接覆盖安装 |
+> | **定位** | **可检索的差异化，不是汉化**：点按出招（点棋盘才识别推理支招、不点零功耗）、中文 TTS 支招播报（纯中文着法 / 播报内容多选 / 试听 / 增强功能诊断导出）、一页式「增强功能」开关台、包名锁定 + 固定签名可直接覆盖安装 |
 > | **当前版本** | **v1.5**（标签 `cn-1.5`）· 自行下载见 [Releases](https://github.com/zjh1934/chess-dike-cn/releases) · 更新说明 [docs/RELEASE.md](docs/RELEASE.md) |
 > | **上游对接** | [UPSTREAM.md](UPSTREAM.md)（带日期的版本审计 + 同步策略 + 合规红线）· [docs/DIFFERENTIATION.md](docs/DIFFERENTIATION.md)（12 项差异化清单）· [docs/COLD_START.md](docs/COLD_START.md)（冷启动内容）· [docs/UPSTREAM_CONTRIB.md](docs/UPSTREAM_CONTRIB.md)（回流上游素材） |
 >

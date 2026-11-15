@@ -362,11 +362,11 @@ class AssistActivity : AppCompatActivity() {
                             androidx.appcompat.app.AlertDialog.Builder(this)
                                 .setTitle("发现新版本 ${result.tag}")
                                 .setMessage(
-                                    "最新稳定版发布于 ${result.date}（当前构建 ${com.xqdk.chess.BuildConfig.BUILD_DATE}）。\n\n" +
-                                    "APK 请从 GitHub Release 页面下载安装（需要可访问 GitHub 的网络环境）。\n\n" +
-                                    "注意：v3.2 起为官方安全版本线（全新签名证书 + 发布指纹门禁）。\n" +
-                                    "从本版及更早版本升级需先卸载再安装（仅此一次，之后恢复覆盖升级）。" +
-                                    "请只从官方渠道下载，证书指纹可在 README 核验。"
+                                    "本分支最新版本发布于 ${result.date}（当前构建 ${com.xqdk.chess.BuildConfig.BUILD_DATE}）。\n\n" +
+                                    "APK 请从本分支 GitHub Release 页面自行下载安装（需要可访问 GitHub 的网络环境）。\n\n" +
+                                    "注意：本包是国内增强版（非官方），使用本分支固定 debug 签名；" +
+                                    "v1.3 起包名与签名已固定，各版本之间可直接覆盖安装，无需卸载。" +
+                                    "上游官方签名版仍需先卸载；签名指纹可在 CI 构建日志核验。"
                                 )
                                 .setPositiveButton("打开下载页") { _, _ ->
                                     runCatching {

@@ -11,15 +11,19 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 /**
- * 正式发布的 tag 双制式（2026-10-31 用户拍板切换）：
- * - 新制 `vX.Y` / `vX.Y.Z`（语义化版本，此后正式版只发这个）——tag 名里没有日期，
- *   日期取 Release 的发布时间（published_at，缺失回退 created_at）换算北京时间；
- * - 旧制 `stable-YYYYMMDD`（8 位日期，字典序 = 时间序）——已废弃停发，但历史
- *   stable Release 永久挂在仓库上，老用户的检查更新必须能继续看到它们。
- * 两制式的比较口径统一为 8 位北京时间日期（见 [ReleaseInfo]）。
+ * 正式发布的 tag 制式（v1.5 起本分支独立发布，不再查上游 releases）：
+ * - **本分支现行** `cn-X.Y` / `cn-X.Y.Z`（如 `cn-1.5`）：不以 v 开头，避免命中
+ *   上游 `android.yml` 的 `tags: ["v*"]`；日期取 Release 的 published_at
+ *   （缺失回退 created_at）换算北京时间；
+ * - **本分支历史** `voice-1.x`（v1.0~v1.4）：老用户检查更新仍要能识别；
+ * - **上游制式** `vX.Y` / `vX.Y.Z` 与 `stable-YYYYMMDD`：保留兼容，便于把 API
+ *   临时切回上游或对照上游版本线时仍能解析。
+ * 所有非 stable 制式统一按发布时间取 8 位北京时间日期，比较口径一致（见 [ReleaseInfo]）。
  */
 private val SEMVER_TAG_RE = Regex("^v\\d+(\\.\\d+){1,2}$")
 private val STABLE_TAG_RE = Regex("^stable-(\\d{8})$")
+private val CN_TAG_RE = Regex("^cn-\\d+(\\.\\d+){1,2}$")
+private val LEGACY_VOICE_TAG_RE = Regex("^voice-\\d+(\\.\\d+){1,2}$")
 
 /** 北京时区（Release 发布时间换算目标；CI 产物 BUILD_DATE 同为北京时间口径） */
 private val ZONE_BEIJING: ZoneId = ZoneId.of("Asia/Shanghai")
@@ -39,7 +43,8 @@ sealed class UpdateResult {
     /** 已是最新（或列表里没有比构建日期更新的正式版） */
     object UpToDate : UpdateResult()
 
-    /** 发现新版本：tag = v3.2（新制）/ stable-20261030（旧制历史），date = 8 位日期 */
+    /** 发现新版本：tag = cn-1.5（本分支现行）/ voice-1.4（本分支历史）/
+     *  v3.2（上游制式）/ stable-20261030（上游旧制），date = 8 位日期 */
     data class Newer(val tag: String, val date: String) : UpdateResult()
 
     /** 查询失败：短文案已归类，直接可上屏 */
@@ -62,7 +67,8 @@ fun parseReleases(json: String): List<ReleaseInfo> {
         // 日期三源：旧制 tag 名自带 → 新制发布时间 → 缺失回退创建时间；全部不可得
         // （外来的杂 tag / 时间字段损坏）则剔除，绝不参与"最新"比较
         val date = STABLE_TAG_RE.find(tag)?.groupValues?.get(1)
-            ?: (if (SEMVER_TAG_RE.matches(tag)) {
+            ?: (if (SEMVER_TAG_RE.matches(tag) || CN_TAG_RE.matches(tag) ||
+                    LEGACY_VOICE_TAG_RE.matches(tag)) {
                 isoToBeijingDate(o.optString("published_at"))
                     ?: isoToBeijingDate(o.optString("created_at"))
             } else null)
@@ -78,8 +84,9 @@ fun isNewer(latestDate: String, buildDate: String): Boolean = latestDate > build
 /**
  * 检查更新（连线页手动按钮，设计移植自 Cabinet internal/update）：
  * **不主动检查**——无启动自检、无后台轮询，用户点"检查更新"才发一次查询；
- * 查 GitHub releases 列表选最新正式发布（新制 vX.Y.Z + 旧制 stable-* 双制式并存），
- * 与构建日期比较后提示，**不内置下载安装**（提示后跳 Release 页由用户手动下载
+ * 查**本分支** GitHub releases 列表选最新正式发布（cn-X.Y 现行 + voice-1.x 历史，
+ * 兼容上游 vX.Y.Z / stable-* 制式），与构建日期比较后提示，**不内置下载安装**
+ * （提示后跳本分支 Release 页由用户手动下载
  * ——不申请 REQUEST_INSTALL_PACKAGES 敏感权限，维持"最小权限集"的合规形象）。
  *
  * 设计要点（Cabinet 同款血泪经验）：
@@ -97,10 +104,12 @@ fun isNewer(latestDate: String, buildDate: String): Boolean = latestDate > build
 class AppUpdateChecker(private val buildDate: String) {
 
     companion object {
-        /** 本仓 releases 列表（匿名查询，免 token） */
-        const val RELEASES_API = "https://api.github.com/repos/Silva6c/chess-dike/releases?per_page=10"
-        /** 用户下载页（正式 Release，浏览器打开） */
-        const val RELEASES_PAGE = "https://github.com/Silva6c/chess-dike/releases"
+        /** 本分支 releases 列表（匿名查询，免 token）。
+         *  v1.5 起仓库改名 chess-dike-cn、标签改 cn-*；此前指向上游 Silva6c/chess-dike
+         *  会把用户导向官方版，与本分支「非官方、独立发布」的定位冲突。 */
+        const val RELEASES_API = "https://api.github.com/repos/zjh1934/chess-dike-cn/releases?per_page=10"
+        /** 用户下载页（本分支正式 Release，浏览器打开自行下载安装包） */
+        const val RELEASES_PAGE = "https://github.com/zjh1934/chess-dike-cn/releases"
         /** API 查询超时（Cabinet 拍板定值 3s） */
         private const val TIMEOUT_MS = 3000
         private const val TAG = "AppUpdateChecker"

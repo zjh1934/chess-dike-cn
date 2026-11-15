@@ -253,7 +253,7 @@
         <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
             android:layout_marginTop="10dp" android:gravity="center_vertical" android:orientation="horizontal">
             <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
-                android:text="播报诊断记录" android:textColor="@color/xq_ink_text" android:textSize="13sp"
+                android:text="增强功能诊断记录" android:textColor="@color/xq_ink_text" android:textSize="13sp"
                 tools:ignore="HardcodedText" />
             <Button android:id="@+id/btn_voice_diag" style="@style/ValueChip"
                 android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="开"
@@ -263,7 +263,7 @@
         <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
             android:layout_marginTop="8dp" android:gravity="center_vertical" android:orientation="horizontal">
             <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
-                android:text="导出播报诊断（MD）" android:textColor="@color/xq_ink_text" android:textSize="13sp"
+                android:text="导出增强功能诊断（MD）" android:textColor="@color/xq_ink_text" android:textSize="13sp"
                 tools:ignore="HardcodedText" />
             <Button android:id="@+id/btn_voice_export" style="@style/ValueChip"
                 android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="导出"
@@ -273,7 +273,7 @@
         <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
             android:layout_marginTop="8dp" android:gravity="center_vertical" android:orientation="horizontal">
             <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
-                android:text="清空播报诊断日志" android:textColor="@color/xq_ink_text" android:textSize="13sp"
+                android:text="清空增强功能诊断日志" android:textColor="@color/xq_ink_text" android:textSize="13sp"
                 tools:ignore="HardcodedText" />
             <Button android:id="@+id/btn_voice_clear" style="@style/ValueChip"
                 android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="清空"

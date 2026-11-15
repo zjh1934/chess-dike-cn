@@ -93,4 +93,34 @@ class AppUpdateCheckerTest {
         assertTrue(isNewer("20270101", "20261231"))
         assertFalse(isNewer("20261231", "20270101"))
     }
+
+    // ===== v1.5：仓库改名 + 标签改 cn-* 后检查更新的回归 =====
+
+    @Test
+    fun `本分支cn标签与历史voice标签都能解析且杂tag剔除`() {
+        val json = """[
+          {"tag_name":"cn-1.5","draft":false,"prerelease":false,"published_at":"2026-11-15T06:10:00Z"},
+          {"tag_name":"voice-1.4","draft":false,"prerelease":false,"published_at":"2026-11-15T02:20:00Z"},
+          {"tag_name":"release-candidate","draft":false,"prerelease":false}
+        ]"""
+        val rels = parseReleases(json)
+        assertEquals(listOf("cn-1.5", "voice-1.4"), rels.map { it.tag })
+        assertEquals("20261115", rels.first().date)
+    }
+
+    @Test
+    fun `cn标签晚于上游v标签时取cn为最新`() {
+        val json = """[
+          {"tag_name":"v3.4","draft":false,"prerelease":false,"published_at":"2026-11-13T20:50:00Z"},
+          {"tag_name":"cn-1.5","draft":false,"prerelease":false,"published_at":"2026-11-15T06:10:00Z"}
+        ]"""
+        assertEquals("cn-1.5", parseReleases(json).maxByOrNull { it.date }?.tag)
+    }
+
+    @Test
+    fun `检查更新指向本分支仓库而非上游`() {
+        assertTrue(AppUpdateChecker.RELEASES_API.contains("zjh1934/chess-dike-cn"))
+        assertTrue(AppUpdateChecker.RELEASES_PAGE.contains("zjh1934/chess-dike-cn/releases"))
+        assertFalse(AppUpdateChecker.RELEASES_API.contains("Silva6c/chess-dike"))
+    }
 }

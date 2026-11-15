@@ -29,7 +29,7 @@ import java.util.Locale
  *   「开/关」按钮，点一档为开、其余自动变关；当前档位的说明文字随选择刷新。
  * - 自动识别档下的点棋盘行为（点按刷新 开/关）。
  * - 中文播报：总开关 / 引擎 / 内容多选 / 试听。
- * - 诊断工具：播报诊断开关 / 自选路径导出 MD / 清空。
+ * - 诊断工具：增强功能诊断开关 / 自选路径导出 MD / 清空。
  * - 构建期固定项（包名锁定、固定签名）只读展示，明确不是运行时开关。
  *
  * 全部配置写 AssistConfig（同一 assist_settings），服务每次 render 现读，热改即时生效。
@@ -55,6 +55,9 @@ class FeatureSwitchesActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.feature_switches)
         cfg = AssistConfig(applicationContext)
+        VoiceDiag.log(applicationContext, "增强功能页",
+            "打开 识别方式=${TapMode.labelOf(cfg.tapMode)} 支招播报=${cfg.voiceEnabled} " +
+                "播报内容mask=${cfg.voiceReadMask} 诊断=${cfg.voiceDiagEnabled}")
 
         findViewById<Button>(R.id.btn_fs_back).setOnClickListener { finish() }
 
@@ -86,6 +89,7 @@ class FeatureSwitchesActivity : AppCompatActivity() {
         btnAutoRefresh.setOnClickListener {
             val on = !cfg.quickRefreshEnabled
             cfg.quickRefreshEnabled = on
+            VoiceDiag.log(applicationContext, "配置变更", "自动档点按刷新=$on")
             btnAutoRefresh.text = TapMode.switchText(on)
             Toast.makeText(applicationContext,
                 if (on) "自动识别档：点棋盘＝点按刷新" else "自动识别档：点棋盘＝点按变招",
@@ -165,19 +169,19 @@ class FeatureSwitchesActivity : AppCompatActivity() {
             }
         }
 
-        // ---- 7. 播报诊断开关 ----
+        // ---- 7. 增强功能诊断开关 ----
         val btnDiag = findViewById<Button>(R.id.btn_voice_diag)
         btnDiag.text = TapMode.switchText(cfg.voiceDiagEnabled)
         btnDiag.setOnClickListener {
             val on = !cfg.voiceDiagEnabled
-            VoiceDiag.log(applicationContext, "配置变更", "播报诊断→${TapMode.switchText(on)}")
+            VoiceDiag.log(applicationContext, "配置变更", "增强功能诊断→${TapMode.switchText(on)}")
             cfg.voiceDiagEnabled = on
             btnDiag.text = TapMode.switchText(on)
         }
 
-        // ---- 8. 导出播报诊断（SAF 自选路径，无需存储权限） ----
+        // ---- 8. 导出增强功能诊断（SAF 自选路径，无需存储权限） ----
         findViewById<Button>(R.id.btn_voice_export).setOnClickListener {
-            VoiceDiag.log(applicationContext, "导出", "点击导出播报诊断（自选路径）")
+            VoiceDiag.log(applicationContext, "导出", "点击导出增强功能诊断（自选路径）")
             val dateTag = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
             val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
                 addCategory(Intent.CATEGORY_OPENABLE)
@@ -192,11 +196,11 @@ class FeatureSwitchesActivity : AppCompatActivity() {
             }
         }
 
-        // ---- 9. 清空播报诊断 ----
+        // ---- 9. 清空增强功能诊断 ----
         findViewById<Button>(R.id.btn_voice_clear).setOnClickListener {
-            VoiceDiag.log(applicationContext, "配置变更", "清空播报诊断日志")
+            VoiceDiag.log(applicationContext, "配置变更", "清空增强功能诊断日志")
             VoiceDiag.clear()
-            Toast.makeText(applicationContext, "播报诊断日志已清空", Toast.LENGTH_SHORT).show()
+            Toast.makeText(applicationContext, "增强功能诊断日志已清空", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -231,7 +235,7 @@ class FeatureSwitchesActivity : AppCompatActivity() {
             os.use { it.write(doc.toByteArray(Charsets.UTF_8)) }
             val target = uri.path ?: uri.lastPathSegment ?: "所选位置"
             VoiceDiag.log(applicationContext, "导出", "自选路径：成功 目标=$target")
-            Toast.makeText(applicationContext, "播报诊断已导出：$target", Toast.LENGTH_LONG).show()
+            Toast.makeText(applicationContext, "增强功能诊断已导出：$target", Toast.LENGTH_LONG).show()
         } catch (t: Throwable) {
             VoiceDiag.log(applicationContext, "导出", "自选路径：失败(${t.javaClass.simpleName}) 回落兜底")
             fallbackExport()

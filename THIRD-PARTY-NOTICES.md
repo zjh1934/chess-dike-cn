@@ -54,7 +54,7 @@
 （GPL-3.0）的第三方派生分支。按 GPL-3.0 与常见 NOTICE 实践，明确标注：
 
 - **修改事实**：本分支在上游代码基础上新增/修改了中文 TTS 支招播报链路、点按出招
-  识别闸口与四档识别方式、一页式「增强功能」开关台、播报诊断日志、构建期包名锁定与
+  识别闸口与四档识别方式、一页式「增强功能」开关台、增强功能诊断、构建期包名锁定与
   固定签名、以及配套文档与 CI。改动文件清单见 [`docs/DIFFERENTIATION.md`](docs/DIFFERENTIATION.md)，
   逐版本说明见 [`docs/RELEASE.md`](docs/RELEASE.md)；与上游的版本对照与同步审计见
   [`UPSTREAM.md`](UPSTREAM.md)。

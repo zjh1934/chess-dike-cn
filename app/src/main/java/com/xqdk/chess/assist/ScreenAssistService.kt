@@ -87,8 +87,8 @@ class ScreenAssistService : Service() {
         /** 帧循环兜底 tick 周期（Cabinet 同款）：画面静止后合成器不再产帧、回调停摆，
          *  确认链（多帧一致）靠它重放 lastFrame 推进，否则走子后永远"正在识别棋盘…" */
         private const val FRAME_TICK_MS = 700L
-        /** v1.4 点按识别会话硬上限：超时自动收场，避免一次点按后帧循环永久占用 */
-        private const val TAP_SESSION_TIMEOUT_MS = 10_000L
+        /** 点按出招会话硬上限：超时自动收场并走兜底支招，避免一次点按后帧循环永久占用 */
+        private const val TAP_SESSION_TIMEOUT_MS = 6_000L
         /** 停稳门槛：画面刚运动过（走子动画/切页过渡）时等该时长静默再识别——
          *  过渡帧推理出来的是错误局面，白烧一轮还污染确认链（Cabinet 同款） */
         private const val MOTION_SETTLE_MS = 200L
@@ -218,8 +218,34 @@ class ScreenAssistService : Service() {
      */
     @Volatile private var autoRecognize = false
 
+    /**
+     * 本轮点按会话开始时是否已有确认局面与支招。用于识别失败/超时时决定是否
+     * 兜底「按当前局面重新支招」——v1.4 一进会话就 resetSuggestionState 把旧建议
+     * 清空，识别不出来就整屏空白，用户实测「点棋盘用不了」的根因。
+     */
+    @Volatile private var tapSessionHadBoard = false
+
     /** 识别闸口：自动档常开；点按档仅在本轮会话内开。 */
     private fun recognitionActive(): Boolean = autoRecognize || tapSessionActive
+
+    /** 帧丢弃原因去重键：handleFrame 每帧都跑，只在「原因变化」时写一行诊断，
+     *  既不刷屏又能看出「点了棋盘但帧一直被谁拦下」。 */
+    @Volatile private var lastFrameDropReason: String? = null
+
+    private fun logFrameDrop(reason: String) {
+        if (reason == lastFrameDropReason) return
+        lastFrameDropReason = reason
+        VoiceDiag.log(this, "识别帧", "丢弃：$reason 闸口=${if (recognitionActive()) "开" else "关"} " +
+            "引擎=$engineName 会话=$tapSessionActive")
+    }
+
+    /** 从丢弃恢复到放行时记一条，形成「拦下 → 放行」的完整脉络 */
+    private fun logFrameResume() {
+        if (lastFrameDropReason != null) {
+            lastFrameDropReason = null
+            VoiceDiag.log(this, "识别帧", "恢复放行 引擎=$engineName 会话=$tapSessionActive")
+        }
+    }
 
     @Volatile private var screenChangedSinceRec = true
     /** 帧差签名槽（上帧采样点像素值）：与上帧逐点比较即更新，零分配复用 */
@@ -375,11 +401,21 @@ class ScreenAssistService : Service() {
         initEngine(config.recognizerEngine)
         // 语音提示朗读器（懒初始化 TTS：首次真正要朗读时才绑定系统 TTS 服务）
         voiceSpeaker = VoiceSpeaker(this)
-        // 语音诊断（独立通道）：服务创建一条 + 配置快照；onDestroy 再写一条。
-        // 只记语音链路，不记识别帧/FEN/引擎/性能数据。
+        // 增强功能诊断（独立通道）：服务创建时写一条完整配置快照，onDestroy 再写一条。
+        // v1.5 起覆盖本分支全部改动链路（识别方式 / 闸口 / 点按会话 / 棋盘确认 /
+        // 支招调度 / 中文播报 / 配置变更），只记事件与配置状态，不记识别帧像素、
+        // FEN 具体内容、对局记录、引擎 PV 明细或性能数据。
+        val appVer = try {
+            VoiceDiag.displayVersion(com.xqdk.chess.BuildConfig.VERSION_NAME)
+        } catch (_: Throwable) { "?" }
         VoiceDiag.log(this, "服务onCreate",
-            "语音开关=${config.voiceEnabled} 引擎=${config.ttsEngine.ifEmpty { "跟随系统" }} " +
-                "诊断=${config.voiceDiagEnabled}")
+            "版本=$appVer 包名=com.xqdk.chess " +
+                "识别方式=${TapMode.labelOf(config.tapMode)} 自动识别=${TapMode.isAuto(config.tapMode)} " +
+                "识别引擎=${config.recognizerEngine} 确认帧数=${config.confirmCount} " +
+                "支招播报=${config.voiceEnabled} 播报引擎=${config.ttsEngine.ifEmpty { "跟随系统" }} " +
+                "播报内容mask=${config.voiceReadMask} 自动档点按刷新=${config.quickRefreshEnabled} " +
+                "诊断=${config.voiceDiagEnabled} 闸口=点按档静止态")
+        VoiceDiag.log(this, "诊断覆盖", VoiceDiag.scopeLine())
     }
 
     override fun onBind(intent: Intent?): IBinder = binder
@@ -469,6 +505,8 @@ class ScreenAssistService : Service() {
         autoRecognize = TapMode.isAuto(config.tapMode)
         tapSessionActive = false
         tapSessionDeadline = 0L
+        VoiceDiag.log(this, "识别闸口", "录屏启动：档位=${TapMode.labelOf(config.tapMode)} " +
+            "自动档常开=$autoRecognize 点按档静止态=${!autoRecognize}")
         // 新会话识别立即放行：清退避/burst/成本历史（旧会话的失败退避不带入）
         onnxPacer.reset()
         yoloPacer.reset()
@@ -789,23 +827,24 @@ class ScreenAssistService : Service() {
             pendingEngine = null
             if (want != engineName) switchEngine(want)
         }
-        if (paused || manualMode) return
+        if (paused || manualMode) { logFrameDrop("paused/manualMode"); return }
         // v1.5：只有识别闸口开启（点按档会话内 / 自动档常开）才允许帧进入识别/推理
         // 管线；点按会话结束（确认完成或超时）后在途帧一律丢弃，绝不自行再识别一轮。
-        if (!recognitionActive()) return
+        if (!recognitionActive()) { logFrameDrop("闸口关（未点棋盘/会话已收场）"); return }
         // 停稳门槛：画面刚运动过（走子动画/切页过渡）时先等 MOTION_SETTLE_MS 静默
         // 再识别——过渡帧推理出来的是错误局面，白烧一轮还污染确认；常驻闪烁源
         // 导致永远等不到停稳时按 MOTION_SETTLE_MAX_MS 兜底放行（Cabinet 同款）
         val nowTs = System.currentTimeMillis()
         if (nowTs - lastMotionTs < MOTION_SETTLE_MS) {
             if (motionWaitStart == 0L) motionWaitStart = nowTs
-            if (nowTs - motionWaitStart < MOTION_SETTLE_MAX_MS) return
+            if (nowTs - motionWaitStart < MOTION_SETTLE_MAX_MS) { logFrameDrop("等画面停稳"); return }
         } else {
             motionWaitStart = 0L
         }
         // 保存最近一帧引用（Frame 像素独立分配，保存引用安全）：
         // 画面静止回调停摆时由 frameTick 重放它推进多帧确认
         lastFrame = frame
+        logFrameResume()
         if (engineName == ENGINE_ONNX) {
             handleFrameOnnx(frame)
             return
@@ -820,7 +859,7 @@ class ScreenAssistService : Service() {
         val now = System.currentTimeMillis()
         // 节拍器闸口：成本自适应间隔 + 失败退避（此前固定 250ms 在画面持续变化时
         // 背靠背整屏推理，真机热节流拖垮全系统——Cabinet 同款教训）
-        if (!yoloPacer.canRecognizeNow(now)) return
+        if (!yoloPacer.canRecognizeNow(now)) { logFrameDrop("YOLO 节拍器退避"); return }
         val pace = yoloPacer.describe()
         val crop = cropHint(frame)
         val t0 = System.currentTimeMillis()
@@ -887,6 +926,12 @@ class ScreenAssistService : Service() {
             BoardTracker.Event.SAME_BOARD -> {
                 // 已确认局面与屏幕一致：本帧画面已消费，兜底 tick 可停重放
                 screenChangedSinceRec = false
+                // 点按出招：局面没变也是「本轮已确认」，支招在点下时已发出，立即收场
+                // 不再干等超时（v1.4 在这里什么都不做 → 用户看到 6~10 秒无响应）
+                if (tapSessionActive && !autoRecognize) {
+                    VoiceDiag.log(this, "棋盘确认", "SAME_BOARD：局面未变化，点按会话收场")
+                    endTapSession(success = true)
+                }
             }
         }
         // 同 ONNX：成功但仍未确认时续 burst，保持 300ms 级确认节奏（见 handleFrameOnnx）
@@ -900,11 +945,11 @@ class ScreenAssistService : Service() {
      */
     private fun handleFrameOnnx(frame: Frame) {
         val eng = onnxEngine
-        if (eng == null || !eng.loaded) return // 模型加载中/已回退：跳帧
+        if (eng == null || !eng.loaded) { logFrameDrop("ONNX 未就绪/已回退"); return }
         val now = System.currentTimeMillis()
         // 节拍器闸口：间隔 = max(1s, 上次成本×2) × 失败退避。真机全图定位帧 ~1s 时
         // 自动拉长到 2~4s，杜绝背靠背推理；burst 期收紧为 cost×1.1 保持确认节奏
-        if (!onnxPacer.canRecognizeNow(now)) return
+        if (!onnxPacer.canRecognizeNow(now)) { logFrameDrop("ONNX 节拍器退避"); return }
         // 放行节拍快照：此刻的 pacer 状态即本帧被放行依据（识别行"节拍"列）
         val pace = onnxPacer.describe()
         val t0 = System.currentTimeMillis()
@@ -992,6 +1037,10 @@ class ScreenAssistService : Service() {
             }
             BoardTracker.Event.SAME_BOARD -> {
                 screenChangedSinceRec = false
+                if (tapSessionActive && !autoRecognize) {
+                    VoiceDiag.log(this, "棋盘确认", "SAME_BOARD：局面未变化，点按会话收场")
+                    endTapSession(success = true)
+                }
             }
         }
         // 成功但仍未确认（候选累积中）：续 burst 保持 300ms 级确认节奏——角点缓存
@@ -1083,7 +1132,10 @@ class ScreenAssistService : Service() {
             }
             if (!ok) {
                 engineName = ENGINE_YOLO
+                VoiceDiag.log(this, "识别引擎", "ONNX 加载失败（${System.currentTimeMillis() - loadStart}ms）→ 回退 YOLO")
                 setStatus("ONNX 引擎加载失败\n已回退 YOLO 识别")
+            } else {
+                VoiceDiag.log(this, "识别引擎", "ONNX 加载成功（${System.currentTimeMillis() - loadStart}ms）")
             }
             diagLog?.appendEvent("ONNX加载",
                 if (ok) "成功，${System.currentTimeMillis() - loadStart}ms"
@@ -1129,7 +1181,8 @@ class ScreenAssistService : Service() {
         diagLog?.appendEvent("棋盘确认", currentFen)
         postRender()
         scheduleAnalysis()
-        // v1.4：本轮点按识别已完成，立即收场回到"不点不动"的静止态
+        VoiceDiag.log(this, "棋盘确认", "NEW_BOARD：已重建局面并重新支招（不记 FEN 内容）")
+        // 本轮点按识别已完成，立即收场回到"不点不动"的静止态
         endTapSession(success = true)
     }
 
@@ -1171,10 +1224,13 @@ class ScreenAssistService : Service() {
             if (fen.isEmpty()) return@post
             val redGo = tracker.redGo
             val myTurn = redGo == mySideIsRed()
+            VoiceDiag.log(this@ScreenAssistService, "支招调度",
+                "我方回合=$myTurn 引擎就绪=$engineReady 已有局面=true（不记 FEN 内容）")
             if (myTurn) {
                 val moves = queryBook(canonical, redGo)
                 if (!moves.isNullOrEmpty()) {
                     bookMoves = moves
+                    VoiceDiag.log(this@ScreenAssistService, "支招调度", "来源=开局库 候选数=${moves.size}")
                     mainHandler.post { postRender() }
                     return@post
                 }
@@ -1204,6 +1260,8 @@ class ScreenAssistService : Service() {
             }
             bookMoves = null
             if (!engineReady) {
+                VoiceDiag.log(this@ScreenAssistService, "支招调度",
+                    "未发出：引擎未就绪 ${engineErrorText ?: "预热中"}")
                 mainHandler.post { setStatus(engineErrorText ?: "引擎预热中…") }
                 return@post
             }
@@ -1482,6 +1540,10 @@ class ScreenAssistService : Service() {
     }
 
     private fun onOverlayAction(action: OverlayAction) {
+        // 诊断黄金一行：点棋盘到底有没有派发到服务、当时是哪档识别方式、闸口开没开。
+        // 用户报「点棋盘用不了」时，先看这行就能区分「手势没到达」还是「到达后识别卡住」。
+        VoiceDiag.log(this, "面板动作", "action=$action 识别方式=${TapMode.labelOf(config.tapMode)} " +
+            "闸口=${if (recognitionActive()) "开" else "关"} 会话=$tapSessionActive")
         when (action) {
             OverlayAction.TAP_SUGGEST -> startTapRecognition()
             OverlayAction.PAUSE -> {
@@ -1539,33 +1601,39 @@ class ScreenAssistService : Service() {
     }
 
     /**
-     * v1.4 点棋盘 = 启动一轮识别会话（worker 线程，与帧循环串行）。
+     * v1.5 点棋盘 = 「立即出招 + 顺带识别一轮」（worker 线程，与帧循环串行）。
      *
-     * 一次点按只做一轮：抓当前画面 → 识别 → 多帧确认 → 重建 FEN → 查库/引擎支招 →
-     * 语音播报；确认或超时后 [endTapSession] 立刻收场，回到"不点不动"的静止态。
-     * 会话期间允许 frameTick 重放 lastFrame 推进确认链（画面静止不产帧时也能确认）。
+     * v1.4 的写法在这里有个致命体验 bug：一进会话就 tracker.reset() +
+     * resetSuggestionState()，把已确认局面和已有支招全部清空，还强制要求重新凑满
+     * confirmCount 帧产出 NEW_BOARD 才支招。静止画面 / 识别器缺模型 / 棋盘被遮挡
+     * 时确认链迟迟凑不满，6 秒超时后界面一片空白 —— 用户实测「点棋盘用不了」。
+     *
+     * 现在的语义：
+     * 1. **保留**已有局面与支招，不清 tracker、不清建议；
+     * 2. 点下即按当前局面 [scheduleAnalysis] 一次 → 立刻有反馈（不点仍零触发）；
+     * 3. 同时开识别闸口跑一轮：画面没变 → SAME_BOARD 直接收场；变了 →
+     *    NEW_BOARD 走 [onBoardConfirmed] 用新局面再支招一次；
+     * 4. 识别失败/超时 → [endTapSession] 按当前局面兜底支招，绝不留下空白。
      */
     private fun startTapRecognition() {
         // 自动档闸口已常开，点棋盘不应再叠一层点按会话（超时/收场会互相打架）
-        if (autoRecognize) return
+        if (autoRecognize) {
+            VoiceDiag.log(this, "点按出招", "自动识别档：点棋盘不另起会话（闸口常开）")
+            return
+        }
         if (mediaProjection == null) {
+            VoiceDiag.log(this, "点按出招", "拒绝：录屏未启动")
             setStatus("录屏未启动\n请回连线页重新开始屏幕识别")
             return
         }
         if (paused || manualMode) {
+            VoiceDiag.log(this, "点按出招", "拒绝：paused=$paused manualMode=$manualMode")
             setStatus("已暂停或手动摆棋中\n点『继续』/退出手动后再点棋盘")
             return
         }
         tapSessionActive = true
         tapSessionDeadline = System.currentTimeMillis() + TAP_SESSION_TIMEOUT_MS
-        // 重开一轮确认链（保留当前轮次），保证本轮必然产出一次 NEW_BOARD → 重新支招；
-        // 不 reset 的话 SAME_BOARD 会吞掉这次点按，用户看不到任何反应。
-        tracker.reset(tracker.redGo)
-        resetSuggestionState()
-        recMissStreak = 0
-        invalidStreak = 0
-        cropUnstableStreak = 0
-        sessionGrid = null
+        tapSessionHadBoard = currentCanonical != null && currentFen.isNotEmpty()
         // 点击即放行：清掉上次识别的成本/退避历史，不让 pacer 把首帧挡在门外
         onnxPacer.reset()
         yoloPacer.reset()
@@ -1574,21 +1642,41 @@ class ScreenAssistService : Service() {
         motionWaitStart = 0L
         screenChangedSinceRec = true
         pendingFrame = false
-        setStatus("正在识别本轮棋局…\n请保持棋盘完整无遮挡")
-        // 立刻用最近画面推进第一帧，不等下一次合成器回调（静止时可能永远等不到）
-        lastFrame?.let { f ->
+        val f = lastFrame
+        VoiceDiag.log(this, "点按出招", "会话启动 档位=${TapMode.labelOf(config.tapMode)} " +
+            "已有局面=$tapSessionHadBoard 首帧可用=${f != null} 超时=${TAP_SESSION_TIMEOUT_MS}ms")
+        // ① 立即反馈：按当前局面重新支招（用户点一下就一定看到出招，不必等识别）
+        if (tapSessionHadBoard) {
+            scheduleAnalysis()
+            setStatus("正在识别本轮棋局…\n已按当前局面重新支招")
+        } else {
+            setStatus("正在识别本轮棋局…\n请保持棋盘完整无遮挡")
+        }
+        // ② 顺带识别一轮：立刻用最近画面推进第一帧，不等下一次合成器回调
+        //   （静止画面合成器不再产帧，等回调可能永远等不到）
+        if (f != null) {
             pendingFrame = true
             workerHandler.post { pendingFrame = false; handleFrame(f) }
+        } else {
+            VoiceDiag.log(this, "点按出招", "首帧不可用：等待真实帧回调/兜底超时")
         }
     }
 
-    /** 一轮点按识别收场：清会话标志，帧循环随即回到零推理静止态。 */
+    /** 一轮点按识别收场：清会话标志；识别失败时按当前局面兜底支招，绝不留空白。 */
     private fun endTapSession(success: Boolean) {
         if (!tapSessionActive) return
         tapSessionActive = false
         tapSessionDeadline = 0L
-        if (!success) {
-            setStatus("本轮未确认棋局\n请让棋盘完整无遮挡，再点一次棋盘")
+        if (success) {
+            VoiceDiag.log(this, "点按出招", "会话完成：局面已确认/未变化，支招已发出")
+        } else if (tapSessionHadBoard) {
+            // 兜底：本轮没重新识别成功，但已有局面/支招仍在 → 再按当前局面支招一次
+            VoiceDiag.log(this, "点按出招", "会话超时/失败：走兜底支招（保留已有局面）")
+            scheduleAnalysis()
+            setStatus("本轮未重新识别\n已按当前局面重新支招")
+        } else {
+            VoiceDiag.log(this, "点按出招", "会话超时/失败：无已有局面，提示重试点棋盘")
+            setStatus("未识别到棋盘\n请让棋盘完整无遮挡，再点一次棋盘")
         }
         postRender()
     }
@@ -1799,6 +1887,8 @@ class ScreenAssistService : Service() {
     private fun mySideIsRed(): Boolean = currentOrientation == Orientation.STANDARD
 
     @Volatile private var lastStatusText = "未启动"
+    /** 状态文案进诊断日志的去重键：只在文案变化时记一行，避免引擎 info 期刷屏 */
+    @Volatile private var lastDiagStatusText: String? = null
     /** setStatus 的瞬时提示文案：只在随后一次渲染中生效（此后回到常规状态文案），由主线程消费后清空 */
     @Volatile private var statusOverrideText: String? = null
     /** 最近一次已推送到通知栏的状态文本（通知去重：内容不变不 notify，根因 10） */
@@ -1817,6 +1907,12 @@ class ScreenAssistService : Service() {
     private fun setStatus(text: String) {
         lastStatusText = text
         statusOverrideText = text
+        // 所有状态变化都进增强功能诊断（去重）：点棋盘后界面显示什么、有没有超时
+        // 提示、引擎有没有报错，日志里都能直接读到，不再只有 3 行 TTS 事件
+        if (text != lastDiagStatusText) {
+            lastDiagStatusText = text
+            VoiceDiag.log(this, "状态文案", text.replace('\n', '／'))
+        }
         notifyStatusChanged(text)
         postRender()
         // 渲染消费后失效：下一次 postRender（引擎 info/棋盘确认等）回到常规状态文案。
@@ -2119,6 +2215,7 @@ class ScreenAssistService : Service() {
     }
 
     private fun releaseCapture() {
+        VoiceDiag.log(this, "识别闸口", "录屏释放：关闸口（会话=$tapSessionActive 自动=$autoRecognize）")
         tapSessionActive = false
         tapSessionDeadline = 0L
         autoRecognize = false
