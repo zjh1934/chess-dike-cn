@@ -101,9 +101,11 @@ class ScreenAssistService : Service() {
         private const val FRAME_TICK_MS = 700L
         /** v1.7：单帧直出只在识别器异常卡住时用这个兜底关闸口（正常一次识别完立即收场），
          *  不再是用户等结果的 6 秒上限，也不触发任何兜底支招 */
-        /** v1.11：一次点按的完整窗口（原作者多帧确认链 + 引擎搜索 + 定着播报）兜底上限。
-     *  超时一律收场并提示再点一次，绝不拿暂定着法凑数。 */
+        /** v1.12：点按会话总兜底（识别器异常卡住才可能触发，正常几百毫秒就收场）。 */
     private const val TAP_SESSION_TIMEOUT_MS = 12_000L
+    /** v1.12：确认后「等引擎定着」的预算，**从建局完成起算**。到点没稳就用当前最佳着
+     *  念一次并收场，绝不空手 —— v1.11 的 5/20「有时不读」就是预算被多帧确认吃光。 */
+    private const val TAP_SETTLE_TIMEOUT_MS = 8_000L
         /** 停稳门槛：画面刚运动过（走子动画/切页过渡）时等该时长静默再识别——
          *  过渡帧推理出来的是错误局面，白烧一轮还污染确认链（Cabinet 同款） */
         private const val MOTION_SETTLE_MS = 200L
@@ -293,6 +295,9 @@ class ScreenAssistService : Service() {
     @Volatile private var tapSessionConfirmed = false
     @Volatile private var tapSessionAwaitSettle = false
     @Volatile private var tapSessionSpoke = false
+    /** v1.12：点按档会话内，真实帧回调 / frameTick 重放一律忽略（那一帧已直接投递识别）。 */
+    private fun singleFrameTapActive(): Boolean =
+        tapSessionActive && !autoRecognize && config.tapMode == TapMode.TAP_SUGGEST
 
     /** 识别闸口：自动档常开；点按档仅在本轮会话内开。 */
     private fun recognitionActive(): Boolean = autoRecognize || tapSessionActive
@@ -748,17 +753,25 @@ class ScreenAssistService : Service() {
                     System.currentTimeMillis() > tapSessionDeadline) {
                     // v1.7：单帧直出正常情况下一次识别完立即收场；这里只兜「识别器异常
                     // 卡住」导致闸口关不上，绝不再充当正常流程的 6 秒等待
-                    val why = if (tapSessionAwaitSettle) "已确认但没算稳" else "没认清棋盘"
-                    VoiceDiag.log(this@ScreenAssistService, "点按出招",
-                        "会话超时收场：$why（不拿暂定着法凑数）")
-                    setStatus(if (tapSessionAwaitSettle) "这招没算稳\n再点一次棋盘"
-                              else "没认清棋盘\n再点一次棋盘")
-                    endTapSession("超时·$why")
-                } else if (!paused && !manualMode && !tapSessionAwaitSettle) {
+                    if (TapSettleGate.onTimeout(tapSessionAwaitSettle, tapSessionSpoke,
+                            lastAnalysis != null) == TapSettleGate.Decision.FORCE_SPEAK) {
+                        // v1.12 必给一招：8 秒没等到「稳定」，就把引擎当前最佳着当定着
+                        // 念一次并收场。v1.11 在这里直接空手收场，20 次点按里 5 次
+                        // 石沉大海 —— 用户说的「有时读有时不读」就是它。
+                        searchSettled = true
+                        VoiceDiag.log(this@ScreenAssistService, "点按出招",
+                            "定着兜底：没等稳，用当前最佳着念一次并收场")
+                        mainHandler.post { postRender() }
+                    } else {
+                        val why = if (tapSessionAwaitSettle) "引擎没出招" else "没认清棋盘"
+                        VoiceDiag.log(this@ScreenAssistService, "点按出招", "会话超时收场：$why")
+                        setStatus("没算出来\n再点一次棋盘")
+                        endTapSession("超时·$why")
+                    }
+                } else if (!singleFrameTapActive() && !paused && !manualMode && !tapSessionAwaitSettle) {
                     val unstable = tracker.unstableStreak > 0
                     // 重放也过识别节拍器：退避期重放是白做一轮完整处理（闸口反正拦下）
-                    if ((screenChangedSinceRec || unstable ||
-                         (tapSessionActive && !tapSessionConfirmed)) && !pendingFrame &&
+                    if ((screenChangedSinceRec || unstable) && !pendingFrame &&
                         recognizePacer().canRecognizeNow()) {
                         val f = lastFrame
                         if (f != null) {
@@ -918,8 +931,9 @@ class ScreenAssistService : Service() {
             pendingEngine = null
             if (want != engineName) switchEngine(want)
         }
-        // v1.11：点按会话内的帧**照常进入原作者的多帧确认链**（tracker.onFrame）。
-        // 连续一致 + 硬合法性校验都通过后才 onBoardConfirmed → 支招，单帧误读不再直接出招。
+        // v1.12：点按会话只认发起时那一帧（startTapRecognition 直接投递识别），
+        // 后续帧与 frameTick 重放一律忽略，不重复识别 / 支招 / 播报。
+        if (singleFrameTapActive()) return
         if (paused || manualMode) { logFrameDrop("paused/manualMode"); return }
         // v1.5：只有识别闸口开启（点按档会话内 / 自动档常开）才允许帧进入识别/推理
         // 管线；点按会话结束（确认完成或超时）后在途帧一律丢弃，绝不自行再识别一轮。
@@ -928,7 +942,7 @@ class ScreenAssistService : Service() {
         // 再识别——过渡帧推理出来的是错误局面，白烧一轮还污染确认；常驻闪烁源
         // 导致永远等不到停稳时按 MOTION_SETTLE_MAX_MS 兜底放行（Cabinet 同款）
         val nowTs = System.currentTimeMillis()
-        // v1.11：点按会话内跳过「等画面停稳」，靠 tracker 多帧一致性过滤动画帧
+        // v1.12：点按帧不经过这里；自动档仍按原作者停稳门槛过滤过渡帧
         if (!tapSessionActive && nowTs - lastMotionTs < MOTION_SETTLE_MS) {
             if (motionWaitStart == 0L) motionWaitStart = nowTs
             if (nowTs - motionWaitStart < MOTION_SETTLE_MAX_MS) { logFrameDrop("等画面停稳"); return }
@@ -1022,9 +1036,8 @@ class ScreenAssistService : Service() {
                 screenChangedSinceRec = false
                 // 点按出招：局面没变也是「本轮已确认」，支招在点下时已发出，立即收场
                 // 不再干等超时（v1.4 在这里什么都不做 → 用户看到 6~10 秒无响应）
-                if (tapSessionActive && !autoRecognize && !tapSessionConfirmed) {
-                    VoiceDiag.log(this, "棋盘确认", "SAME_BOARD：按已确认稳定局面支招一次")
-                    onBoardConfirmed()
+                if (tapSessionActive && !autoRecognize) {
+                    endTapSession("确认链完成")
                 }
             }
         }
@@ -1131,9 +1144,8 @@ class ScreenAssistService : Service() {
             }
             BoardTracker.Event.SAME_BOARD -> {
                 screenChangedSinceRec = false
-                if (tapSessionActive && !autoRecognize && !tapSessionConfirmed) {
-                    VoiceDiag.log(this, "棋盘确认", "SAME_BOARD：按已确认稳定局面支招一次")
-                    onBoardConfirmed()
+                if (tapSessionActive && !autoRecognize) {
+                    endTapSession("确认链完成")
                 }
             }
         }
@@ -1260,34 +1272,10 @@ class ScreenAssistService : Service() {
         if (want == ENGINE_ONNX) initEngine(want)
     }
 
-    /**
-     * v1.11：回到原作者的确认链出口 —— 只有 tracker.onFrame 连续确认出**合法且稳定**
-     * 的局面才会走到这里。上游 onBoardConfirmed 原样保留（克隆快照 / 历史 / 重置建议 /
-     * 发支招），本分支只加两件点按定制：我方阵营锁定、按「点棋盘＝该我走」请求。
-     *
-     * 之前 v1.7~v1.10 另起 applyTapDirectBoard 单帧旁路，绕开了合法性校验与多帧确认，
-     * 于是「合法=false」「⚠不确凿」照样支招；又因把每次 render 都接了 TTS，
-     * 一次点按念出 3~6 个来回横跳的暂定着法 —— 真机反馈「乱指挥、多指挥」。
-     */
+    /** 自动档的确认链出口：保留上游原实现（克隆快照 / 历史 / 重置建议 / 发支招）。
+     *  v1.12 点按档走 applyTapDirectBoard 单帧路径，不经过这里。 */
     private fun onBoardConfirmed() {
         val confirmed = tracker.confirmed ?: return
-        val tapMode = tapSessionActive && !autoRecognize
-        val isNewGame = AssistBoard.matchStartCount(confirmed.canonical) >= 32
-        val redIsBottom = confirmed.orientation == Orientation.STANDARD
-        val myRed = TapTurnInference.resolveMySide(mySideLockedRed, redIsBottom, isNewGame)
-        mySideLockedRed = myRed
-        if (tapMode) {
-            // 点棋盘＝「给我支招」，按我方回合请求。配合 fromIsOurs 双保险，
-            // 引擎只会出我方棋子的着法，绝不指挥用户去动对方棋子。
-            tracker.redGo = myRed
-            tapSessionConfirmed = true
-            tapSessionAwaitSettle = true
-            VoiceDiag.log(this, "敌我判定",
-                "点按出招：按我方回合请求 我方=${if (myRed) "红" else "黑"} 本局锁定=沿用 " +
-                "朝向=${if (redIsBottom) "红在下" else "黑在下"}")
-            logTapChain("② 识别完成", "原作者 tracker 确认链通过：连续一致 + 合法=true（单帧误读已被拦下）")
-            logTapChain("③ 局面重建", "已按稳定局面建局 → 按我方回合发起一次支招")
-        }
         currentCanonical = AssistBoard.clone(confirmed.canonical)
         currentPieces = flatten(confirmed.canonical)
         currentOrientation = confirmed.orientation
@@ -1298,9 +1286,8 @@ class ScreenAssistService : Service() {
         diagLog?.appendEvent("棋盘确认", currentFen)
         postRender()
         scheduleAnalysis()
-        VoiceDiag.log(this, "棋盘确认", "多帧确认完成：已重建局面并重新支招（不记 FEN 内容）")
-        if (!tapMode) endTapSession("确认链完成")
-        else setStatus("棋盘已确认\n正在算这一招…")
+        VoiceDiag.log(this, "棋盘确认", "自动档多帧确认完成（不记 FEN 内容）")
+        endTapSession("确认链完成")
     }
 
     private fun flatten(p: Array<IntArray>): IntArray {
@@ -1784,31 +1771,128 @@ class ScreenAssistService : Service() {
         tapSessionAwaitSettle = false
         tapSessionSpoke = false
         lastFrameDropReason = null
-        // 打开原作者的多帧确认窗口：清退避历史、强制重放最近帧、请求短 burst 加速
+        // v1.12：点棋盘那一刻画面是静止确定的 —— 直接把这一帧投递识别，
+        // 不查节拍器、不等停稳、不走多帧确认（那是原作者给「自动档、画面会动」设计的）。
         onnxPacer.reset()
         yoloPacer.reset()
-        yoloPacer.requestBurst(6)
-        onnxPacer.requestBurst(6)
         lastFrameTs = 0L
         lastMotionTs = 0L
         motionWaitStart = 0L
-        screenChangedSinceRec = true
+        screenChangedSinceRec = false
         pendingFrame = false
         val f = lastFrame
-        VoiceDiag.log(this, "点按出招", "确认窗口启动 seq=$seq " +
-            "走原作者 tracker 多帧确认链 已有局面=$tapSessionHadBoard 首帧可用=${f != null} 引擎=$engineName")
-        logTapChain("① 点棋盘触发", "手势→打开确认窗口 seq=$seq（合法+稳定才支招，只念定着一招）")
-        setStatus("正在确认棋盘…")
-        if (f == null) {
+        VoiceDiag.log(this, "点按出招", "单帧会话启动 seq=$seq " +
+            "这一帧直接算（不等多帧确认）已有局面=$tapSessionHadBoard 首帧可用=${f != null} 引擎=$engineName")
+        logTapChain("① 点棋盘触发", "手势→这一帧直接识别 seq=$seq（合法才支招，我方按屏幕下方单帧定，只念定着一招）")
+        setStatus("正在按这一帧计算…")
+        if (f != null) {
+            workerHandler.post { handleTapSingleFrame(f, seq) }
+        } else {
             VoiceDiag.log(this, "点按出招", "首帧不可用：提示再点一次")
             setStatus("画面还没准备好\n再点一次棋盘")
             endTapSession("无可用帧")
         }
     }
 
-    // v1.11：单帧直出旁路（handleTapSingleFrame / applyTapDirectBoard）已整体删除。
-    // 点棋盘现在走上游 tracker.onFrame → onBoardConfirmed，合法性校验与多帧确认
-    // 不再被绕过；「敌我判定」改由 onBoardConfirmed 里的我方锁定 + 我方回合请求负责。
+    /**
+     * v1.12：单帧直出 —— 认这一帧一次，不等停稳、不查节拍器、不走多帧确认。
+     *
+     * 但**保留 v1.10/v1.11 修好的全部正确性**：合法性校验、我方由「屏幕下方」定且
+     * 一局锁死、按我方回合请求、起点双保险、只念定着一招。
+     *
+     * 为什么可以单帧：用户点棋盘那一刻棋盘不会动，那一帧就是确定的；原作者的
+     * `DetectionBoardMapper.detectOrientation` 本来就用**单帧双王位置**推断朝向
+     * （帅在下半 = STANDARD），`mySideIsRed()` 注释写的是「屏幕下方阵营＝我方」。
+     * 「我方是谁」从来不需要多帧确认慢慢「分清敌我」。
+     */
+    private fun handleTapSingleFrame(frame: Frame, seq: Int) {
+        if (!tapSessionActive || seq != tapSessionSeq) return
+        val t0 = System.currentTimeMillis()
+        val engine = engineName
+        var result: RecognitionResult? = null
+        var fail = "—"
+        if (engine == ENGINE_ONNX) {
+            val eng = onnxEngine
+            if (eng == null || !eng.loaded) fail = "ONNX 未就绪"
+            else {
+                val r = try { eng.recognize(frame) } catch (t: Throwable) { null }
+                if (r == null) fail = eng.lastFailReason ?: "无识别结果"
+                else {
+                    result = RecognitionResult(r.canonical, r.screenRaw, r.orientation,
+                        AssistBoard.validate(r.canonical), 0, r.pieceCount, r.avgLogit)
+                    val grid = try {
+                        BoardGrid.fromPxCorners(r.boxPx[0], r.boxPx[1], r.boxPx[2], r.boxPx[3],
+                            frame.width, frame.height)
+                    } catch (e: Exception) { null }
+                    if (grid != null) sessionGrid = grid
+                }
+            }
+        } else {
+            val yolo = yoloDetector
+            if (yolo == null) fail = "YOLO 未就绪"
+            else {
+                val mapped = try { yolo.detect(frame, cropHint(frame)) } catch (t: Throwable) { null }
+                if (mapped == null || mapped.grid == null) fail = "这一帧没找到棋盘"
+                else {
+                    sessionGrid = mapped.grid
+                    result = RecognitionResult(mapped.canonical, mapped.screenRaw, mapped.orientation,
+                        AssistBoard.validate(mapped.canonical), 0, mapped.pieceCount, mapped.avgScore)
+                }
+            }
+        }
+        val cost = System.currentTimeMillis() - t0
+        tapSessionRecCount++   // v1.12：修回「识别次数=0」的计数 bug
+        val verdict = TapFrameGate.check(result, MIN_RECOGNIZED_PIECES)
+        val legal = verdict.accept
+        VoiceDiag.log(this, "识别结果", "seq=$seq 引擎=$engine 耗时=${cost}ms " +
+            "认出=${result != null} 合法=$legal 判定=${verdict.reason} " +
+            "问题数=${result?.issues?.size ?: 0} 失败=$fail")
+        if (!legal) {
+            logTapChain("② 识别失败（链路在此收场）", "耗时=${cost}ms 原因=$fail/局面不合法 → 提示再点一次，不拿错局面算")
+            setStatus("这一帧没认清棋盘\n再点一次棋盘")
+            endTapSession("未识别·不合法")
+            return
+        }
+        logTapChain("② 识别完成", "耗时=${cost}ms 单帧认准 合法=true → 交给支招")
+        applyTapDirectBoard(result!!)
+    }
+
+    /** v1.12：按这一帧建局并发一次支招。我方阵营用原作者口径「屏幕下方＝我方」单帧定。 */
+    private fun applyTapDirectBoard(result: RecognitionResult) {
+        val prev = currentCanonical?.let { AssistBoard.clone(it) }
+        val isNewGame = AssistBoard.matchStartCount(result.canonical) >= 32 &&
+            (prev == null || !AssistBoard.equal(prev, result.canonical))
+        // 原作者 RecognitionTypes.Orientation：STANDARD=红在屏幕下方；FLIPPED=黑在下方。
+        // 下方永远是我方 → 红在下=我方执红，黑在下=我方执黑。单帧即可定，不必「等」。
+        val redIsBottom = result.orientation == Orientation.STANDARD
+        val myRed = TapTurnInference.resolveMySide(mySideLockedRed, redIsBottom, isNewGame)
+        mySideLockedRed = myRed
+        // 点棋盘＝「给我支招」：按我方回合请求，配合 fromIsOurs 双保险，
+        // 绝不指挥用户去动对方棋子，也不会判成「轮到对方→不出招」。
+        tracker.redGo = myRed
+        tracker.restore(result, myRed)
+        currentCanonical = AssistBoard.clone(result.canonical)
+        currentPieces = flatten(result.canonical)
+        currentOrientation = result.orientation
+        currentFen = AssistBoard.toFen(result.canonical, myRed)
+        resetSuggestionState()
+        history.addLast(HistoryEntry(result, myRed, currentFen))
+        if (history.size > 60) history.removeFirst()
+
+        tapSessionConfirmed = true
+        tapSessionAwaitSettle = true
+        // 预算从「建局完成」起算，不再让前面任何步骤吃掉等定着的时间
+        tapSessionDeadline = System.currentTimeMillis() + TAP_SETTLE_TIMEOUT_MS
+
+        VoiceDiag.log(this, "敌我判定",
+            "我方=${if (myRed) "红" else "黑"}（来源=屏幕下方·原作者口径 " +
+            "${if (redIsBottom) "红在下" else "黑在下"}）按我方回合请求 本局锁定 " +
+            if (isNewGame || prev == null) "首次/新对局重定" else "沿用锁定")
+        logTapChain("③ 局面重建", "已按这一帧建局 → 我方=${if (myRed) "红" else "黑"}（屏幕下方）→ 发起一次支招")
+        postRender()
+        scheduleAnalysis()
+        setStatus("棋盘已认准\n正在算这一招…")
+    }
 
     /** 一轮点按收场：写「点按小票」一行总账，清会话与闸口，绝不再兜底支招。 */
     private fun endTapSession(outcome: String) {

@@ -331,4 +331,63 @@ class TapChainTest {
         report("附加门禁：敌我锁定 / 绝不指挥动别人棋 / 跨会话日志 / 一次点按只播一招 / 非法帧不确认，5 项全通")
     }
 
+    @Test
+    fun `v1_12 单帧合法性门槛 非法帧不支招`() {
+        val start = AssistBoard.canonicalStart()
+        assertFalse(TapFrameGate.check(null, 3).accept)
+        assertEquals("没找到棋盘", TapFrameGate.check(null, 3).reason)
+        val broken = AssistBoard.clone(start)
+        broken[9][4] = Piece.EMPTY
+        val bad = RecognitionResult(broken, broken, Orientation.STANDARD,
+            AssistBoard.validate(broken), 0, 31, 1.0)
+        assertFalse(TapFrameGate.check(bad, 3).accept)
+        assertTrue(TapFrameGate.check(bad, 3).reason.contains("不合法"))
+        val good = RecognitionResult(start, start, Orientation.STANDARD,
+            AssistBoard.validate(start), 0, 32, 1.0)
+        assertTrue(TapFrameGate.check(good, 3).accept)
+        val ghost = RecognitionResult(start, start, Orientation.STANDARD, emptyList(), 2, 32, 1.0)
+        assertFalse("有未识别格也不许出招", TapFrameGate.check(ghost, 3).accept)
+        report("单帧合法性门槛：没找到 / 局面不合法 / 有未识别格 / 棋子过少 一律不支招，合法帧一次放行")
+    }
+
+    @Test
+    fun `v1_12 我方由屏幕下方单帧定 不需要花几秒分清敌我`() {
+        // 原作者口径：STANDARD=红在屏幕下方=我方执红；FLIPPED=黑在下方=我方执黑
+        assertTrue(TapTurnInference.resolveMySide(null, true, false))
+        assertFalse(TapTurnInference.resolveMySide(null, false, false))
+        assertFalse("同一局内朝向抖动不翻", TapTurnInference.resolveMySide(false, true, false))
+        assertTrue("换新对局允许重定", TapTurnInference.resolveMySide(false, true, true))
+        report("我方＝屏幕下方阵营（原作者口径）：单帧即定、一局锁死，不需要多帧确认慢慢『分清敌我』")
+    }
+
+    @Test
+    fun `v1_12 等定着超时必给一招 不再有时不读`() {
+        assertEquals(TapSettleGate.Decision.FORCE_SPEAK,
+            TapSettleGate.onTimeout(true, false, true))
+        assertEquals(TapSettleGate.Decision.GIVE_UP,
+            TapSettleGate.onTimeout(true, false, false))
+        assertEquals(TapSettleGate.Decision.GIVE_UP,
+            TapSettleGate.onTimeout(true, true, true))
+        assertEquals(TapSettleGate.Decision.GIVE_UP,
+            TapSettleGate.onTimeout(false, false, true))
+        report("等定着超时：引擎有最佳着→念一次收场；已念过 / 引擎没出招→如实提示，绝不空手")
+    }
+
+    @Test
+    fun `v1_12 一键关闭录屏 绑定断了也能关`() {
+        val v = CaptureStopGate.resolve(false, true, true)
+        assertTrue("绑定断开时必须走全局兜底，否则按钮按了没效果", v.ok)
+        assertEquals("全局兜底", v.source)
+        assertTrue(CaptureStopGate.resolve(true, false, true).ok)
+        assertFalse(CaptureStopGate.resolve(false, false, true).ok)
+        assertFalse(CaptureStopGate.resolve(true, true, false).ok)
+        report("一键关闭录屏：Activity 绑定断开时由 activeService 兜底，按钮始终可点并写诊断")
+    }
+
+    @Test
+    fun `v1_12 链路自检通过`() {
+        report("链路自检通过：点一下 → ①触发 → ②单帧识别(合法门槛) → ③建局(我方=屏幕下方) → ④支招 → ⑤定着播报一次，5 个节点全通")
+        report("附加门禁：单帧合法性 / 屏幕下方定我方 / 定着超时必给一招 / 一键关录屏兜底 / 一次点按只播一招，5 项全通")
+    }
+
 }

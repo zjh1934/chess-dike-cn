@@ -208,9 +208,18 @@ class AssistActivity : AppCompatActivity() {
         btnStartCapture = findViewById(R.id.btn_start_capture)
         btnStopCapture = findViewById(R.id.btn_stop_capture)
         btnStopCapture.setOnClickListener {
-            val svc = service
-            if (svc?.isCapturing() != true) {
-                Toast.makeText(this, "录屏未在运行，无需关闭", Toast.LENGTH_SHORT).show()
+            // v1.12：service 绑定可能已断（服务重启 / 页面重建），改用服务自身的全局
+            // 引用兜底；点击一律写诊断，以后「按了没效果」能一眼查出原因。
+            val bound = service
+            val svc = bound ?: ScreenAssistService.activeService
+            val capturing = svc?.isCapturing() == true
+            val verdict = CaptureStopGate.resolve(bound != null, svc != null, capturing)
+            com.xqdk.chess.assist.VoiceDiag.log(this, "录屏停止",
+                "主页一键关闭录屏：点击 引用=${verdict.source} isCapturing=$capturing " +
+                "可关闭=${verdict.ok} 服务存在=${svc != null}")
+            if (!verdict.ok) {
+                Toast.makeText(this, verdict.hint, Toast.LENGTH_SHORT).show()
+                refreshStatus()
                 return@setOnClickListener
             }
             // 与悬浮窗「关闭」、主按钮第二态完全同一条路径：收面板 + 停录屏 + 停服务
@@ -597,7 +606,10 @@ class AssistActivity : AppCompatActivity() {
                 ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) ==
                 PackageManager.PERMISSION_GRANTED
         val svc = service
-        val running = svc?.isCapturing() == true
+        // v1.12：不依赖 Activity 绑定引用 —— 服务重启 / 绑定断开时 activeService 仍在，
+        // 否则「一键关闭录屏」会灰掉或点了只弹 Toast，看起来「按了没效果」。
+        val live = svc ?: ScreenAssistService.activeService
+        val running = live?.isCapturing() == true
 
         setStep(stepOverlayNum, stepOverlayChip,
             if (overlayOk) StepState.DONE else StepState.TODO,
@@ -617,13 +629,12 @@ class AssistActivity : AppCompatActivity() {
             if (running) "运行中" else "未启动")
 
         setMainButton(if (running) MainBtnState.RUNNING else MainBtnState.IDLE)
-        // v1.7 一键关闭录屏：只有真在录屏时才可点，避免对着一个没反应的按钮
-        // isInitialized 保护：statusRunnable / onServiceConnected 理论上都晚于 onCreate，
-        // 但周期刷新入口多，防御一次未初始化崩溃
-        if (::btnStopCapture.isInitialized) btnStopCapture.isEnabled = running
+        // v1.12：按钮始终可点。原来按 running 置灰，绑定一断就变灰 → 用户点了没反应；
+        // 现在点击时自己判断并给明确 Toast + 诊断，不会再「按了没效果」。
+        if (::btnStopCapture.isInitialized) btnStopCapture.isEnabled = true
 
         if (running) {
-            val statusText = svc!!.getStatusText()
+            val statusText = live!!.getStatusText()
             val mapped = AssistStateMap.fromStatusText(statusText)
             setStateDot(
                 when (mapped) {
