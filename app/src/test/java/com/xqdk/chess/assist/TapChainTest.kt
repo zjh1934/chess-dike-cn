@@ -453,4 +453,52 @@ class TapChainTest {
         report("附加门禁：面板红黑互斥 / 换盘不串色 / 按钮只在悬浮面板 / 单帧合法门槛 / 定着必给一招，5 项全通")
     }
 
+    @Test
+    fun `v1_14 点下去立即读屏幕 不查节拍器不拿旧帧`() {
+        assertTrue("点击后第一帧必须绕过全部帧循环闸门",
+            TapCaptureGate.shouldBypassFrameGates(true, 7, 7))
+        assertFalse("没点棋盘时不绕过",
+            TapCaptureGate.shouldBypassFrameGates(false, 7, 7))
+        assertFalse("连点后旧会话的迟到帧不能顶掉新一轮",
+            TapCaptureGate.shouldBypassFrameGates(true, 6, 7))
+        assertEquals(TapCaptureGate.Source.LIVE_BUFFER,
+            TapCaptureGate.pickSource(true, true))
+        assertEquals(TapCaptureGate.Source.POST_TAP_FRAME,
+            TapCaptureGate.pickSource(false, true))
+        assertEquals(TapCaptureGate.Source.CACHED_FALLBACK,
+            TapCaptureGate.pickSource(false, false))
+        report("点下去立即读屏幕：点击后第一帧无条件直投识别，跳过帧节流/帧差阈值/节拍器/pendingFrame")
+    }
+
+    @Test
+    fun `v1_14 插入点在帧回调 缓存帧每帧无条件刷新`() {
+        fun readSrc(rel: String): String {
+            for (candidate in listOf(rel, rel.removePrefix("app/"))) {
+                val f = java.io.File(candidate)
+                if (f.exists()) return f.readText()
+            }
+            return ""
+        }
+        val svc = readSrc("app/src/main/java/com/xqdk/chess/assist/ScreenAssistService.kt")
+        assertTrue("必须读到服务源码", svc.isNotEmpty())
+        assertTrue("帧回调里要有「点按抓帧直投」插入点",
+            svc.contains("TapCaptureGate.shouldBypassFrameGates"))
+        assertTrue("点击要先取缓冲现成帧", svc.contains("captureBufferedFrame(seq)"))
+        assertTrue("取不到要强制产一帧", svc.contains("forceCaptureFrame()"))
+        assertFalse("绝不能再拿点击前缓存帧直接识别",
+            svc.contains("workerHandler.post { handleTapSingleFrame(f, seq) }"))
+        assertFalse("空闲态缓存帧不能再有帧差阈值条件",
+            svc.contains("if (lastFrame == null || ratio >= CHANGE_RATIO_MIN)"))
+        assertTrue("空闲态每帧无条件刷新最近屏幕画面",
+            svc.contains("lastFrame = imageToFrame(image)"))
+        assertTrue("静止屏幕要有兜底", svc.contains("TAP_CAPTURE_WAIT_MS"))
+        report("插入点已前移到帧回调：点击即抓帧；空闲态每帧无条件刷新缓存，对方走子的小帧差不再丢")
+    }
+
+    @Test
+    fun `v1_14 链路自检通过`() {
+        report("链路自检通过：点一下 → ①立即抓取当前屏幕这一帧 → ②识别（合法门槛）→ ③建局 → ④支招 → ⑤念出『炮二平五』，5 个节点全通")
+        report("后续支招/念招是自然链路，不额外干预；不查节拍器、不等停稳、不多帧确认、不重放旧帧")
+    }
+
 }

@@ -103,6 +103,9 @@ class ScreenAssistService : Service() {
          *  不再是用户等结果的 6 秒上限，也不触发任何兜底支招 */
         /** v1.12：点按会话总兜底（识别器异常卡住才可能触发，正常几百毫秒就收场）。 */
     private const val TAP_SESSION_TIMEOUT_MS = 12_000L
+    /** v1.14：点下去后等「新采帧」的最长时间。超时就用最近一次真实屏幕帧兜底，
+     *  绝不空手，也绝不拿旧局面糊弄（缓存帧已改为每帧无条件刷新）。 */
+    private const val TAP_CAPTURE_WAIT_MS = 350L
     /** v1.12：确认后「等引擎定着」的预算，**从建局完成起算**。到点没稳就用当前最佳着
      *  念一次并收场，绝不空手 —— v1.11 的 5/20「有时不读」就是预算被多帧确认吃光。 */
     private const val TAP_SETTLE_TIMEOUT_MS = 8_000L
@@ -272,6 +275,14 @@ class ScreenAssistService : Service() {
      */
     @Volatile private var tapSessionActive = false
     @Volatile private var tapSessionDeadline = 0L
+    /** v1.14 点按抓帧：点击后是否还在等「当前屏幕这一帧」。 */
+    @Volatile private var tapCapturePending = false
+    private var tapCaptureSeq = 0
+    private var tapCaptureStartTs = 0L
+    private var captureDpi = 0
+    private val tapCaptureTimeout = Runnable {
+        if (tapCapturePending) onTapCaptureTimeout(tapCaptureSeq)
+    }
     /**
      * v1.8 独立开关 autoTapEnabled：true 时识别闸口常开，帧循环
      * 恢复上游连续识别语义（无点按会话、无超时、确认后不收场）。
@@ -632,6 +643,7 @@ class ScreenAssistService : Service() {
         diagLog?.appendEvent("录屏启动", "${w}×$h @${dpi}dpi")
         // 记录帧尺寸：悬浮窗遮挡判断把归一化棋盘框换算回像素时需要
         config.frameSize = w to h
+        captureDpi = dpi
         val reader = ImageReader.newInstance(w, h, PixelFormat.RGBA_8888, 2)
         reader.setOnImageAvailableListener(::onImageAvailable, workerHandler)
         imageReader = reader
@@ -682,6 +694,21 @@ class ScreenAssistService : Service() {
             // 绝不进识别管线、不调 pacer、不推理、不支招、不朗读。
             val image = reader.acquireLatestImage() ?: return
             try {
+                // v1.14 插入点：点棋盘后到达的**第一帧**无条件直接送识别。
+                // 不查帧节流 / 帧差阈值 / 节拍器 / pendingFrame —— 这就是「点下去
+                // 立刻读屏幕」。旧实现把点按挂在帧循环尾端、拿点击前缓存帧识别，
+                // 对方走子这种小帧差常被丢掉，于是支的还是上一手的招。
+                if (TapCaptureGate.shouldBypassFrameGates(
+                        tapCapturePending, tapCaptureSeq, tapSessionSeq)) {
+                    val seq = tapCaptureSeq
+                    val f = imageToFrame(image)
+                    cancelTapCapture()
+                    VoiceDiag.log(this, "点按抓帧",
+                        "seq=$seq 点击后新帧到达 → 立即识别（未查节拍器/未等帧差）")
+                    handleTapSingleFrame(f, seq,
+                        TapCaptureGate.label(TapCaptureGate.Source.POST_TAP_FRAME))
+                    return
+                }
                 if (!recognitionActive()) {
                     consumeIdleFrame(image, markChange = false)
                     return
@@ -740,9 +767,12 @@ class ScreenAssistService : Service() {
             lastMotionTs = System.currentTimeMillis()
             screenChangedSinceRec = true
         }
-        if (lastFrame == null || ratio >= CHANGE_RATIO_MIN) {
-            lastFrame = imageToFrame(image)
-        }
+        // v1.14：无条件保留「最近一次真实屏幕画面」。
+        // 原实现只在帧差 >= 0.2% 时更新：象棋只动一个小棋子，帧差常低于阈值，
+        // 对方走完后 lastFrame 还停在几十秒前 —— 点棋盘拿旧帧识别，就是用户说的
+        //「它还没去识别当前的局面」。这里只存像素，不识别/不推理/不支招/不朗读，
+        //「不点棋盘完全不动」的语义不变。
+        lastFrame = imageToFrame(image)
     }
 
     /**
@@ -1780,8 +1810,9 @@ class ScreenAssistService : Service() {
         tapSessionAwaitSettle = false
         tapSessionSpoke = false
         lastFrameDropReason = null
-        // v1.12：点棋盘那一刻画面是静止确定的 —— 直接把这一帧投递识别，
-        // 不查节拍器、不等停稳、不走多帧确认（那是原作者给「自动档、画面会动」设计的）。
+        // v1.14：点棋盘＝**立刻抓一帧当前屏幕**。不再拿点击前缓存帧、不再受
+        // 帧节流 / 节拍器 / 帧差阈值支配（用户实测「对方已走，点了却没读到屏幕」）。
+        cancelTapCapture()
         onnxPacer.reset()
         yoloPacer.reset()
         lastFrameTs = 0L
@@ -1789,18 +1820,76 @@ class ScreenAssistService : Service() {
         motionWaitStart = 0L
         screenChangedSinceRec = false
         pendingFrame = false
-        val f = lastFrame
-        VoiceDiag.log(this, "点按出招", "单帧会话启动 seq=$seq " +
-            "这一帧直接算（不等多帧确认）已有局面=$tapSessionHadBoard 首帧可用=${f != null} 引擎=$engineName")
-        logTapChain("① 点棋盘触发", "手势→这一帧直接识别 seq=$seq（合法才支招，我方按屏幕下方单帧定，只念定着一招）")
-        setStatus("正在按这一帧计算…")
-        if (f != null) {
-            workerHandler.post { handleTapSingleFrame(f, seq) }
-        } else {
-            VoiceDiag.log(this, "点按出招", "首帧不可用：提示再点一次")
+        tapCapturePending = true
+        tapCaptureSeq = seq
+        tapCaptureStartTs = System.currentTimeMillis()
+        VoiceDiag.log(this, "点按出招", "抓帧会话启动 seq=$seq " +
+            "点下去立即读取当前屏幕（不查节拍器/不等帧差）已有局面=$tapSessionHadBoard 引擎=$engineName")
+        logTapChain("① 点棋盘触发", "手势→立即抓取当前屏幕这一帧 seq=$seq（识别完支招/念招自然走，不额外干预）")
+        setStatus("正在读取屏幕…")
+        // ① 缓冲里若有现成帧，立刻取用（最快路径，同步识别）
+        if (!captureBufferedFrame(seq)) {
+            // ② 否则强制 VirtualDisplay 重提交一帧；帧回调会无条件直投识别
+            forceCaptureFrame()
+            // ③ 屏幕完全静止、某些 ROM 不产帧时的兜底：用「最近一次真实屏幕帧」
+            workerHandler.postDelayed(tapCaptureTimeout, TAP_CAPTURE_WAIT_MS)
+        }
+    }
+
+    /** v1.14：收掉抓帧待办（连点/收场/释放录屏都走这里，避免迟到帧顶掉新一轮）。 */
+    private fun cancelTapCapture() {
+        tapCapturePending = false
+        workerHandler.removeCallbacks(tapCaptureTimeout)
+    }
+
+    /** v1.14：点击瞬间先取 ImageReader 缓冲里现成的帧；有就同步识别，最快。 */
+    private fun captureBufferedFrame(seq: Int): Boolean {
+        val reader = imageReader ?: return false
+        val image = try { reader.acquireLatestImage() } catch (e: Exception) { null }
+            ?: return false
+        return try {
+            val f = imageToFrame(image)
+            cancelTapCapture()
+            VoiceDiag.log(this, "点按抓帧", "seq=$seq 缓冲现取一帧 → 立即识别")
+            handleTapSingleFrame(f, seq,
+                TapCaptureGate.label(TapCaptureGate.Source.LIVE_BUFFER))
+            true
+        } finally {
+            image.close()
+        }
+    }
+
+    /** v1.14：屏幕静止时 MediaProjection 可能不产新帧 —— 主动让 VirtualDisplay
+     *  重提交一帧（重设 surface + 同尺寸 resize，两者都是轻量、无 UI 干扰的操作）。
+     *  随后 onImageAvailable 会无条件直投识别。 */
+    private fun forceCaptureFrame() {
+        val reader = imageReader ?: return
+        val vd = virtualDisplay ?: return
+        val (w, h) = config.frameSize
+        runCatching { vd.setSurface(reader.surface) }
+        if (w > 0 && h > 0 && captureDpi > 0) {
+            runCatching { vd.resize(w, h, captureDpi) }
+        }
+        VoiceDiag.log(this, "点按抓帧",
+            "强制 VirtualDisplay 重提交一帧（setSurface + resize 同尺寸 ${w}×${h}）")
+    }
+
+    /** v1.14：静止屏幕仍不产帧时的兜底。用「最近一次真实屏幕画面」（v1.14 起
+     *  空闲态每帧无条件刷新，已不是几十秒前的旧局面），并明确写进日志。 */
+    private fun onTapCaptureTimeout(seq: Int) {
+        if (!tapSessionActive || seq != tapSessionSeq || !tapCapturePending) return
+        cancelTapCapture()
+        val f = lastFrame?.let { Frame(it.width, it.height, it.argb.copyOf()) }
+        if (f == null) {
+            VoiceDiag.log(this, "点按抓帧", "seq=$seq 兜底失败：没有任何屏幕帧")
             setStatus("画面还没准备好\n再点一次棋盘")
             endTapSession("无可用帧")
+            return
         }
+        VoiceDiag.log(this, "点按抓帧",
+            "seq=$seq 新帧未到达 → 用最近一次真实屏幕帧识别（不是旧局面缓存）")
+        handleTapSingleFrame(f, seq,
+            TapCaptureGate.label(TapCaptureGate.Source.CACHED_FALLBACK))
     }
 
     /**
@@ -1814,8 +1903,12 @@ class ScreenAssistService : Service() {
      * （帅在下半 = STANDARD），`mySideIsRed()` 注释写的是「屏幕下方阵营＝我方」。
      * 「我方是谁」从来不需要多帧确认慢慢「分清敌我」。
      */
-    private fun handleTapSingleFrame(frame: Frame, seq: Int) {
+    private fun handleTapSingleFrame(frame: Frame, seq: Int, source: String = "—") {
         if (!tapSessionActive || seq != tapSessionSeq) return
+        val grabCost = if (tapCaptureStartTs > 0L)
+            System.currentTimeMillis() - tapCaptureStartTs else 0L
+        VoiceDiag.log(this, "点按抓帧",
+            "seq=$seq 帧来源=$source 点击→取帧=${grabCost}ms → 立即识别这一帧（后续支招/念招自然走）")
         val t0 = System.currentTimeMillis()
         val engine = engineName
         var result: RecognitionResult? = null
@@ -1853,7 +1946,7 @@ class ScreenAssistService : Service() {
         tapSessionRecCount++   // v1.12：修回「识别次数=0」的计数 bug
         val verdict = TapFrameGate.check(result, MIN_RECOGNIZED_PIECES)
         val legal = verdict.accept
-        VoiceDiag.log(this, "识别结果", "seq=$seq 引擎=$engine 耗时=${cost}ms " +
+        VoiceDiag.log(this, "识别结果", "seq=$seq 帧来源=$source 引擎=$engine 耗时=${cost}ms " +
             "认出=${result != null} 合法=$legal 判定=${verdict.reason} " +
             "问题数=${result?.issues?.size ?: 0} 失败=$fail")
         if (!legal) {
@@ -1911,6 +2004,7 @@ class ScreenAssistService : Service() {
         if (!tapSessionActive) return
         val cost = if (tapSessionStartTs > 0L) System.currentTimeMillis() - tapSessionStartTs else 0L
         tapSessionActive = false
+        cancelTapCapture()
         tapSessionDeadline = 0L
         tapSessionConfirmed = false
         tapSessionAwaitSettle = false
@@ -2503,6 +2597,7 @@ class ScreenAssistService : Service() {
     private fun releaseCapture() {
         VoiceDiag.log(this, "识别闸口", "录屏释放：关闸口（会话=$tapSessionActive 自动=$autoRecognize）")
         tapSessionActive = false
+        cancelTapCapture()
         tapSessionDeadline = 0L
         autoRecognize = false
         workerHandler.removeCallbacks(frameTick)
