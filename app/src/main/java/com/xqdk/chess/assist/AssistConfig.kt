@@ -137,6 +137,15 @@ class AssistConfig(context: Context) {
         get() = sp.getInt(KEY_VOICE_READ_MASK, VoicePrompt.DEFAULT_MASK)
         set(value) { sp.edit().putInt(KEY_VOICE_READ_MASK, value).apply() }
 
+    /**
+     * 快捷刷新（v1.3，默认开）：开启后点悬浮窗迷你棋盘 = 点右列「更新」按钮
+     * （OverlayAction.FLIP_TURN，刷新棋局并重新分析）；关闭时点棋盘恢复切换
+     * 候选着法。手动摆棋模式不受影响。服务每次 render 现读，设置页热改即时生效。
+     */
+    var quickRefreshEnabled: Boolean
+        get() = sp.getBoolean(KEY_QUICK_REFRESH_ENABLED, QuickRefresh.DEFAULT_ENABLED)
+        set(value) { sp.edit().putBoolean(KEY_QUICK_REFRESH_ENABLED, value).apply() }
+
     companion object {
         private const val KEY_RECOGNIZER_ENGINE = "recognizer_engine"
         private const val KEY_FRAME_W = "frame_w"
@@ -157,5 +166,6 @@ class AssistConfig(context: Context) {
         private const val KEY_TTS_ENGINE = "tts_engine"
         private const val KEY_VOICE_DIAG_ENABLED = "voice_diag_enabled"
         private const val KEY_VOICE_READ_MASK = "voice_read_mask"
+        private const val KEY_QUICK_REFRESH_ENABLED = "quick_refresh_enabled"
     }
 }

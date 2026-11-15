@@ -12,6 +12,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import com.xqdk.chess.R
 import com.xqdk.chess.assist.AssistConfig
+import com.xqdk.chess.assist.QuickRefresh
 import com.xqdk.chess.assist.VoiceDiag
 import com.xqdk.chess.assist.VoicePrompt
 import com.xqdk.chess.assist.VoiceSpeaker
@@ -168,6 +169,22 @@ class VoiceSettingsActivity : AppCompatActivity() {
             VoiceDiag.log(applicationContext, "配置变更", "清空语音诊断日志")
             VoiceDiag.clear()
             Toast.makeText(applicationContext, "诊断日志已清空", Toast.LENGTH_SHORT).show()
+        }
+
+        // 8. 快捷刷新（v1.3）：与语音无关，但按用户要求放在本设置页；写同一份
+        //    assist_settings，服务每次 render 现读，热改即时生效。
+        val btnQuickRefresh = findViewById<Button>(R.id.btn_quick_refresh)
+        btnQuickRefresh.text = QuickRefresh.switchText(cfg.quickRefreshEnabled)
+        btnQuickRefresh.setOnClickListener {
+            val on = !cfg.quickRefreshEnabled
+            cfg.quickRefreshEnabled = on
+            btnQuickRefresh.text = QuickRefresh.switchText(on)
+            Toast.makeText(
+                applicationContext,
+                if (on) "快捷刷新已开启：点悬浮窗棋盘即可刷新棋局"
+                else "快捷刷新已关闭：点棋盘仍切换候选着法",
+                Toast.LENGTH_SHORT,
+            ).show()
         }
     }
 
