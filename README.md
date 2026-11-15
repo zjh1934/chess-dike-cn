@@ -9,7 +9,7 @@
 > | **本分支** | [zjh1934/chess-dike-cn](https://github.com/zjh1934/chess-dike-cn) · **曾用名 `xqdk-voice`**（v1.0~v1.4，2026-11-15 改名，旧 URL 由 GitHub 自动重定向）· 与上游作者无隶属关系 |
 > | **定位** | **可检索的差异化，不是汉化**：点按出招（点棋盘才识别推理支招、不点零功耗）、中文 TTS 支招播报（纯中文着法 / 播报内容多选 / 试听 / 增强功能诊断导出）、一页式「增强功能」开关台、包名锁定 + 固定签名可直接覆盖安装 |
 > | **当前版本** | **v1.5**（标签 `cn-1.5`）· 自行下载见 [Releases](https://github.com/zjh1934/chess-dike-cn/releases) · 更新说明 [docs/RELEASE.md](docs/RELEASE.md) |
-> | **上游对接** | [UPSTREAM.md](UPSTREAM.md)（带日期的版本审计 + 同步策略 + 合规红线）· [docs/DIFFERENTIATION.md](docs/DIFFERENTIATION.md)（12 项差异化清单）· [docs/COLD_START.md](docs/COLD_START.md)（冷启动内容）· [docs/UPSTREAM_CONTRIB.md](docs/UPSTREAM_CONTRIB.md)（回流上游素材） |
+> | **上游对接** | [UPSTREAM.md](UPSTREAM.md)（带日期的版本审计 + 同步策略 + 合规红线）· [docs/UPSTREAM_AUDIT.md](docs/UPSTREAM_AUDIT.md)（**文件级同步审计**：上游演进 62 / 漏同步 24 / 自研 18 / 两边都改 38）· [docs/DIFFERENTIATION.md](docs/DIFFERENTIATION.md)（13 项差异化清单）· [docs/COLD_START.md](docs/COLD_START.md)（冷启动内容）· [docs/UPSTREAM_CONTRIB.md](docs/UPSTREAM_CONTRIB.md)（回流上游素材） |
 >
 > **著作权与致谢**：本项目全部原有代码、设计、文档的著作权归原作者 Silva6c 及上游贡献者所有，
 > 在此致谢。本分支只是基于 GPL-3.0 的二次开发，**非官方发布、非原版、非认证版**，不使用上游

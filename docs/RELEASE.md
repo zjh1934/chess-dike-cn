@@ -53,7 +53,7 @@
 - 新增 [`docs/DIFFERENTIATION.md`](DIFFERENTIATION.md)：12 项可检索差异化清单与关键词。
 - 新增 [`docs/COLD_START.md`](COLD_START.md) 与 [`docs/UPSTREAM_CONTRIB.md`](UPSTREAM_CONTRIB.md)：冷启动内容选题、双链接模板、回流上游素材。
 - `THIRD-PARTY-NOTICES.md` 补本分支 modification notice；仓库 description 与 12 个 topics 铺检索关键词。
-- **如实说明**：版本审计基于 GitHub 公开 API 元数据，**未做逐文件源码 diff**；跨仓库的 PR/Issue 与站外发布需仓库所有者本人执行，素材已备好。
+- **如实说明**：版本审计已完成**文件级 tree 比对**（`docs/UPSTREAM_AUDIT.md`：上游演进 62 / 漏同步 24 / 自研 18 / 两边都改 38，带日期、可复跑），但 38 个「两边都改」路径仍需逐行语义复核，精确派生点未确认；跨仓库的 PR/Issue 与站外发布需仓库所有者本人执行，素材已备好。
 
 ### 5. 修复：点棋盘没反应 + 诊断日志终于有参考价值
 
