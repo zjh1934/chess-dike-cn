@@ -1,4 +1,5 @@
 # 象棋迪克 XQDK · 国内增强版 v1.13
+> 本文件是**完整更新说明**（含全部历史版本）。Release 页只放极简摘要 + 折叠要点，避免正文把安装包挤到屏幕下方；摘要模板见 [`docs/RELEASE_BRIEF.md`](RELEASE_BRIEF.md)。
 
 > **本仓库是第三方派生分支，不是官方版本。**
 > 原作者 / 上游项目：[**Silva6c/chess-dike**](https://github.com/Silva6c/chess-dike)（作者 **Silva6c**）

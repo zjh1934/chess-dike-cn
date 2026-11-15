@@ -170,9 +170,15 @@ jobs:
             echo "同名 Release 已存在，删除后重建"
             gh release delete "$TAG" --yes --cleanup-tag
           fi
+          # v1.14 起：Release 正文只放极简摘要。之前用整份 docs/RELEASE.md
+          # （累积全部版本历史，v1.13 时 364 行），正文把 Assets 下载区压到屏幕外，
+          # 用户要一直往下翻才能找到安装包。改成短模板 + <details> 折叠 +
+          # 超链接引到仓库里的完整文档；Assets 紧跟正文，不用翻。
+          VER="${TAG#cn-}"
+          sed "s/{{TAG}}/$TAG/g; s/{{VER}}/$VER/g" docs/RELEASE_BRIEF.md > /tmp/release_brief.md
           gh release create "$TAG" dist/*.apk \
             --title "$RELEASE_TITLE" \
-            --notes-file docs/RELEASE.md \
+            --notes-file /tmp/release_brief.md \
             --latest
           echo "=== Release 资产 ==="
           gh release view "$TAG" --json tagName,url,assets \
