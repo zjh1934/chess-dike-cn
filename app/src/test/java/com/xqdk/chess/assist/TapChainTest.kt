@@ -417,9 +417,11 @@ class TapChainTest {
             UserSideChoice.effective(false, false, false, false))
         assertTrue("锁红后新对局识别成黑在下，也仍是红",
             UserSideChoice.effective(true, false, true, false))
-        // 没锁定时仍走原作者自动口径：红在下=我方执红，新对局允许重定
-        assertTrue(UserSideChoice.effective(null, true, false, false))
-        assertFalse(UserSideChoice.effective(null, false, true, true))
+        // 没锁定时仍走原作者自动口径：红在下=我方执红，新对局允许重定。
+        // previousLocked 必须传 null 才是「从未锁定」；传 false 是「已锁黑」，
+        // 后者本来就应返回黑 —— v1.13 首轮 CI 就是这里写错了。
+        assertTrue(UserSideChoice.effective(null, true, false, null))
+        assertFalse(UserSideChoice.effective(null, false, true, null))
         report("换盘不串色：面板锁定绝对优先，自动判定/新对局重定都翻不动；未锁时才按屏幕下方判")
     }
 
