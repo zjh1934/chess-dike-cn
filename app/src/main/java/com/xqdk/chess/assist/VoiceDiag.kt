@@ -59,7 +59,7 @@ object VoiceDiag {
 
     /** 增强功能诊断模块稳定版本标识（我们自己的版本，不受 git describe 派生干扰）。
      *  常量名沿用 v1.2 的 VOICE_MODULE_VERSION 以兼容既有单测与导出文档字段。 */
-    const val VOICE_MODULE_VERSION = "1.9"
+    const val VOICE_MODULE_VERSION = "1.10"
 
     /** 最近一次 [export] 导出文件路径（成功为可展示路径；失败/未导出为 null） */
     @Volatile
@@ -82,6 +82,65 @@ object VoiceDiag {
      */
     const val COMPACT_WINDOW_MS = 5000L
     private val COMPACT_TAGS = setOf("决策", "去重", "状态文案", "识别帧", "排队", "打断")
+
+    /**
+     * v1.10：诊断**跨会话落盘**。之前 entries 只存进程内存，用户手动关录屏/划掉任务
+     * 后服务重建，那次「乱支招」的点按链路全丢 —— 真机导出的日志里只剩 onCreate、
+     * 关闭、再 onCreate、打开设置、导出，一条点棋盘都没有，排障价值为零。
+     *
+     * 现在把关键事件同步 append 到应用私有文件（每行 time\ttag\tdetail），
+     * 导出时把磁盘历史与本次内存快照合并。高频状态类（COMPACT_TAGS）不入盘，
+     * 一次点按约 15 行，单行 append 不拖慢识别/支招延迟。
+     */
+    private const val PERSIST_FILE = "voice_diag_persist.tsv"
+    private const val PERSIST_MAX_LINES = 600
+
+    /**
+     * 纯函数供单测：合并「磁盘历史 + 本次内存」。
+     * 按 (time,tag,detail) 去重即可 —— 磁盘在前、内存在后本来就是时间顺序，
+     * 不按 HH:mm:ss 字符串排序（跨天会乱）。**不按 (tag,detail) 折叠**，否则
+     * 多次点按的同内容「敌我判定」会被压成一条，看不出哪次判反了。
+     */
+    internal fun mergeSessionHistory(disk: List<Entry>, memory: List<Entry>): List<Entry> {
+        val seen = HashSet<String>()
+        val out = ArrayList<Entry>()
+        (mergeConsecutive(disk) + mergeConsecutive(memory)).forEach { e ->
+            val k = e.time + "\u0000" + e.tag + "\u0000" + e.detail
+            if (seen.add(k)) out.add(e)
+        }
+        return out.takeLast(PERSIST_MAX_LINES)
+    }
+
+    private fun persistLine(context: Context, time: String, tag: String, detail: String) {
+        if (tag in COMPACT_TAGS) return
+        try {
+            val f = java.io.File(context.filesDir, PERSIST_FILE)
+            val line = listOf(time, tag, detail).joinToString("\t") {
+                it.replace("\t", " ").replace("\r", " ").replace("\n", " ")
+            } + "\n"
+            java.io.FileOutputStream(f, true).use { it.write(line.toByteArray(Charsets.UTF_8)) }
+        } catch (_: Throwable) {
+            // 写失败不影响主链路（诊断是旁路）
+        }
+    }
+
+    /** 读回落盘历史；超过上限就重写裁剪，避免文件无限增长 */
+    private fun readPersisted(context: Context): List<Entry> {
+        return try {
+            val f = java.io.File(context.filesDir, PERSIST_FILE)
+            if (!f.exists()) return emptyList()
+            val lines = f.readLines(Charsets.UTF_8)
+            val kept = if (lines.size > PERSIST_MAX_LINES) {
+                val tail = lines.takeLast(PERSIST_MAX_LINES)
+                try { f.writeText(tail.joinToString("\n") + "\n", Charsets.UTF_8) } catch (_: Throwable) {}
+                tail
+            } else lines
+            kept.mapNotNull { raw ->
+                val c = raw.split("\t", limit = 3)
+                if (c.size < 3) null else Entry(c[0], c[1], c[2], 1)
+            }
+        } catch (_: Throwable) { emptyList() }
+    }
     private val lastByTag = HashMap<String, Entry>()
     private val lastTsByTag = HashMap<String, Long>()
 
@@ -135,15 +194,19 @@ object VoiceDiag {
                 entries.addAll(kept)
             }
         }
+        // v1.10：写盘放在锁外，单行 append，不阻塞点按链路
+        persistLine(context, time, tag, detail)
     }
 
-    /** 清空当前会话缓冲（不删除已导出的文件） */
-    fun clear() {
+    /** 清空当前会话缓冲（不删除已导出的文件）；v1.10 同时清跨会话历史 */
+    fun clear(context: Context) {
         synchronized(lock) {
             entries.clear()
             lastByTag.clear()
             lastTsByTag.clear()
         }
+        // v1.10：用户点「清空」应该是真清空，连跨会话历史一起删
+        try { java.io.File(context.filesDir, PERSIST_FILE).delete() } catch (_: Throwable) {}
     }
 
     /**
@@ -153,7 +216,8 @@ object VoiceDiag {
      */
     fun buildDocument(context: Context): String {
         val snapshot = synchronized(lock) { entries.toList() }
-        val rows = mergeConsecutive(snapshot).map { e ->
+        // v1.10：把服务重启前那次会话的点按链路一起带出来
+        val rows = mergeSessionHistory(readPersisted(context), snapshot).map { e ->
             formatRowWithCount(e.time, e.tag, e.detail, e.count)
         }
         val device = "${Build.MANUFACTURER} ${Build.MODEL}（Android ${Build.VERSION.RELEASE}）"
@@ -287,9 +351,9 @@ object VoiceDiag {
 
     /** 诊断覆盖说明（纯函数）：写进文档头部与 onCreate 快照，一眼看清这份日志能查什么 */
     fun scopeLine(): String =
-        "点按链路（①触发→②识别→③建局→④支招→⑤播报）/ 点按出招会话 / 点按小票 / 识别结果 / " +
-            "识别闸口 / 识别帧丢弃原因 / 识别引擎 / 棋盘确认 / 支招调度 / 中文播报 / " +
-            "状态文案 / 面板动作 / 录屏停止 / 配置变更 / 导出"
+        "点按链路（①触发→②识别→③建局→④支招→⑤播报）/ 敌我判定（我方/该谁走/轮次来源/朝向锁定）/ " +
+            "点按出招会话 / 点按小票 / 识别结果 / 识别闸口 / 识别帧丢弃原因 / 识别引擎 / 棋盘确认 / " +
+            "支招调度 / 中文播报 / 状态文案 / 面板动作 / 录屏停止 / 配置变更 / 导出 / 跨会话历史"
 
     /** 文档头部信息区（纯函数）：版本、包名、诊断模块版本、识别设置、覆盖范围 */
     fun metaBlock(ver: String, tapModeLabel: String): String =
@@ -297,7 +361,9 @@ object VoiceDiag {
             "- 版本：$ver\n" +
             "- 包名：com.xqdk.chess\n" +
             "- 识别方式：$tapModeLabel\n" +
-            "- 识别设置说明：导出时为当前配置；服务启动态见「服务onCreate」行，运行中切换见「档位同步」行（v1.8 起立即生效）\n" +
+            "- 识别设置说明：导出时为当前配置；服务启动态见「服务onCreate」行\n" +
+            "- 日志范围：含**跨会话历史**（服务重启/关录屏前的点按链路也会带出，v1.10 起落盘）\n" +
+            "- 敌我排障：看「敌我判定」行（我方=红/黑、该谁走、轮次来源、朝向是否锁定）\n" +
             "- 诊断覆盖：${scopeLine()}\n"
 
     /** 组装完整导出文档：标题 + 隐私提示 + 设备/版本信息 + 表头 + 全部行（纯函数）。 */

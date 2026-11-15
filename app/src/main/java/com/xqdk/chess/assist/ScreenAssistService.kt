@@ -398,6 +398,12 @@ class ScreenAssistService : Service() {
     @Volatile private var currentCanonical: Array<IntArray>? = null
     // @Volatile：worker 写、主线程渲染读（陈旧朝向仅瞬时自愈，加栅栏一劳永逸）
     @Volatile private var currentOrientation = Orientation.STANDARD
+    /**
+     * v1.10：我方阵营**一局只认一次**。之前 mySideIsRed() 每帧直接读单帧识别的
+     * orientation（日志里识别引擎=yolo，备用识别对红黑上下容易判反），一翻就
+     * 「敌我不分」。现在首次建局按朝向定一次后锁死，只有满子新对局才重定。
+     */
+    @Volatile private var mySideLockedRed: Boolean? = null
     @Volatile private var lastAnalysis: AnalysisResult? = null
     @Volatile private var selectedCandidate = 0
 
@@ -573,6 +579,8 @@ class ScreenAssistService : Service() {
         // v1.8：按独立开关 autoTapEnabled 决定会话起点。关＝点按档静止态等用户点棋盘；
         // 开＝自动识别常开闸口，不走点按会话/超时逻辑。点棋盘动作由 tapMode 另管。
         autoRecognize = config.autoTapEnabled
+        // v1.10：新会话重新认一次我方（换边/换对局场景）
+        mySideLockedRed = null
         tapSessionActive = false
         tapSessionDeadline = 0L
         VoiceDiag.log(this, "识别闸口", "录屏启动：点棋盘动作=${TapMode.labelOf(config.tapMode)} " +
@@ -1308,9 +1316,19 @@ class ScreenAssistService : Service() {
             if (fen.isEmpty()) return@post
             val redGo = tracker.redGo
             val myTurn = redGo == mySideIsRed()
+            val sideLine = TapTurnInference.describe(redGo, mySideIsRed(),
+                TapTurnInference.TurnOutcome(redGo, "当前生效轮次", false))
             VoiceDiag.log(this@ScreenAssistService, "支招调度",
-                "我方回合=$myTurn 引擎就绪=$engineReady 已有局面=true（不记 FEN 内容）")
-            logTapChain("④ 支招调度", "我方回合=$myTurn 引擎就绪=$engineReady → 开局库/引擎出招")
+                "我方回合=$myTurn 引擎就绪=$engineReady 已有局面=true（不记 FEN 内容）｜ $sideLine")
+            logTapChain("④ 支招调度",
+                if (myTurn) "轮到我方 → 开局库/引擎出招（$sideLine）"
+                else "轮到对方 → **不出招**，避免指挥动对方棋子（$sideLine）")
+            if (!myTurn) {
+                // 轮到对方：请求仍可发给引擎做预判缓存，但绝不当成「给你支的招」
+                // 显示或朗读（renderOverlay 的 myTurn 门槛 + fromIsOurs 双保险已挡）。
+                // 这里给一句人话，用户不会以为软件卡了。
+                mainHandler.post { setStatus("现在轮到对方走\n等对方落子后再点棋盘") }
+            }
             if (myTurn) {
                 val moves = queryBook(canonical, redGo)
                 if (!moves.isNullOrEmpty()) {
@@ -1829,9 +1847,29 @@ class ScreenAssistService : Service() {
         endTapSession("已支招")
     }
 
-    /** 用单帧结果直接重建局面并发起支招：轮次沿用当前值，不推断、不回退、不清空旧显示。 */
+    /**
+     * v1.10：用单帧结果直接重建局面并发起支招。
+     *
+     * 与 v1.7~v1.9 的关键差别：**不再沿用 tracker.redGo**。单帧直出当初为了快把
+     * BoardTracker 的差分推断整个砍掉，结果轮次永远是服务启动时的「红先」，
+     * 走几步之后 FEN 的 w/b 全是错的；再叠加每帧采信识别朝向的 mySideIsRed()，
+     * 引擎就会把**对方棋子**的着法当成建议画箭头、念出来（真机反馈「敌我不分、
+     * 指挥我去动别人的棋」）。
+     *
+     * 现在按 TapTurnInference 客观推断该谁走，并把我方阵营锁定一次；两者都写进
+     * 「敌我判定」诊断，以后导日志一眼能看出判没判反。
+     */
     private fun applyTapDirectBoard(result: RecognitionResult) {
-        val redGo = tracker.redGo
+        val prev = currentCanonical?.let { AssistBoard.clone(it) }
+        val turn = TapTurnInference.inferRedGo(prev, result.canonical, tracker.redGo)
+        val redGo = turn.redGo
+        val isNewGame = AssistBoard.matchStartCount(result.canonical) >= 32 &&
+            (prev == null || !AssistBoard.equal(prev, result.canonical))
+        val redIsBottom = result.orientation == Orientation.STANDARD
+        val myRed = TapTurnInference.resolveMySide(mySideLockedRed, redIsBottom, isNewGame)
+        mySideLockedRed = myRed
+        val sideLine = TapTurnInference.describe(redGo, myRed, turn)
+
         tracker.restore(result, redGo)
         currentCanonical = AssistBoard.clone(result.canonical)
         currentPieces = flatten(result.canonical)
@@ -1840,9 +1878,14 @@ class ScreenAssistService : Service() {
         resetSuggestionState()
         history.addLast(HistoryEntry(result, redGo, currentFen))
         if (history.size > 60) history.removeFirst()
+
+        VoiceDiag.log(this, "敌我判定", sideLine +
+            " 朝向=${if (redIsBottom) "红在下" else "黑在下"}" +
+            " 本局锁定=${if (myRed) "我方红" else "我方黑"}" +
+            if (mySideLockedRed == myRed && !isNewGame && prev != null) "（沿用锁定）" else "（首次/新对局重定）")
         VoiceDiag.log(this, "棋盘确认",
-            "单帧直出：按这一帧重建局面并支招（不记 FEN 内容）轮次沿用=$redGo")
-        logTapChain("③ 局面重建", "已按这一帧建局（不记内容）→ 发起一次支招")
+            "单帧直出：按这一帧重建局面并支招（不记 FEN 内容）该谁走=${if (redGo) "红" else "黑"}")
+        logTapChain("③ 局面重建", "已按这一帧建局 → $sideLine → 发起一次支招")
         postRender()
         scheduleAnalysis()
     }
@@ -1856,6 +1899,7 @@ class ScreenAssistService : Service() {
         VoiceDiag.log(this, "点按小票", "seq=$tapSessionSeq 耗时=${cost}ms 结果=$outcome " +
             "识别次数=$tapSessionRecCount 拦下次数=$tapSessionDropCount " +
             "已有局面=$tapSessionHadBoard 引擎=$engineName " +
+            "我方=${if (mySideIsRed()) "红" else "黑"} 该谁走=${if (tracker.redGo) "红" else "黑"} " +
             "点棋盘动作=${TapMode.labelOf(config.tapMode)} 自动识别=${TapMode.switchText(autoRecognize)}")
         postRender()
     }
@@ -2062,8 +2106,10 @@ class ScreenAssistService : Service() {
         )
     }
 
-    /** 我方颜色（随动自动判定：屏幕下方阵营=我方，红在下=我方执红） */
-    private fun mySideIsRed(): Boolean = currentOrientation == Orientation.STANDARD
+    /** v1.10：我方颜色优先读本局锁定值；没锁过（首次建局前）才回退到屏幕朝向。
+     *  锁定后不再被任何单帧识别结果带翻 —— 这是「敌我不分」的根治。 */
+    private fun mySideIsRed(): Boolean =
+        mySideLockedRed ?: (currentOrientation == Orientation.STANDARD)
 
     @Volatile private var lastStatusText = "未启动"
     /** 状态文案进诊断日志的去重键：只在文案变化时记一行，避免引擎 info 期刷屏 */
@@ -2195,7 +2241,9 @@ class ScreenAssistService : Service() {
         val recHealthy = manualMode || (recMissStreak == 0 && tracker.unstableStreak < 5)
         val book = if (myTurn) bookMoves else null
 
-        // 送子防线：着法起点必须是我方棋子——轮次错乱/幽灵 FEN 时宁可不显示
+        // v1.10 送子防线（双保险）：着法起点必须**同时**是「我方棋子」且「当前该走方」。
+        // 旧版只比 myRed，而 myRed 自己可能被单帧朝向判反 —— 防线跟着一起反，
+        // 就是「指挥我去动别人的棋」。任一不符一律不显示、不朗读，宁可提示再点一次。
         fun fromIsOurs(ucci: String): Boolean {
             val arr = currentPieces ?: return false
             if (ucci.length < 4) return false
@@ -2203,7 +2251,8 @@ class ScreenAssistService : Service() {
             val fy = 9 - (ucci[1] - '0')
             if (fx !in 0..8 || fy !in 0..9) return false
             val p = arr[fy * 9 + fx]
-            return p in 1..14 && Piece.isRed(p) == myRed
+            if (p !in 1..14) return false
+            return Piece.isRed(p) == myRed && Piece.isRed(p) == turnRed
         }
 
         // ---- 优势行 / 候选预案行 / 箭头（结构化槽位，"一眼原则"）----

@@ -174,7 +174,7 @@ class FeatureSwitchesActivity : AppCompatActivity() {
         // ---- 9. 清空增强功能诊断 ----
         findViewById<Button>(R.id.btn_voice_clear).setOnClickListener {
             VoiceDiag.log(applicationContext, "配置变更", "清空增强功能诊断日志")
-            VoiceDiag.clear()
+            VoiceDiag.clear(applicationContext)
             Toast.makeText(applicationContext, "增强功能诊断日志已清空", Toast.LENGTH_SHORT).show()
         }
     }

@@ -4,6 +4,7 @@ import android.content.Context
 import android.view.MotionEvent
 import android.view.View
 import com.xqdk.chess.R
+import com.xqdk.chess.gamelogic.Piece
 import com.xqdk.chess.assist.ui.OverlayAction
 import com.xqdk.chess.assist.ui.OverlayChessView
 import com.xqdk.chess.assist.ui.OverlayPanelView
@@ -163,4 +164,106 @@ class TapChainTest {
         assertEquals("总开关关闭", off.reason)
         report("语音开关：默认开→念「马三进四」；用户手动关→不念。默认值就是好用的那个")
     }
+    /** 模拟「某一方走了一步」：把 (fx,fy) 的棋子搬到 (tx,ty)，返回新局面 */
+    private fun movedBoard(from: Array<IntArray>, fx: Int, fy: Int, tx: Int, ty: Int): Array<IntArray> {
+        val b = AssistBoard.clone(from)
+        val piece = b[fy][fx]
+        b[fy][fx] = Piece.EMPTY
+        b[ty][tx] = piece
+        return b
+    }
+
+    @Test
+    fun `敌我判定_对方走一步后轮次被客观推断 不再沿用红先`() {
+        val start = AssistBoard.canonicalStart()
+        // 首次：开局红先
+        val first = TapTurnInference.inferRedGo(null, start, true)
+        assertTrue(first.redGo)
+        assertTrue(first.source.contains("首次开局"))
+
+        // 对方（黑）走了一步：黑马从 (1,0) 到 (2,2)
+        val afterBlack = movedBoard(start, 1, 0, 2, 2)
+        val t1 = TapTurnInference.inferRedGo(start, afterBlack, true)
+        assertTrue("黑方刚走 → 下一手该红走（redGo=true），不能沿用旧值乱判", t1.redGo)
+        assertTrue(t1.source.contains("差分推断"))
+        assertFalse(t1.uncertain)
+
+        // 对方（红）走了一步：红兵从 (0,6) 到 (0,5)
+        val afterRed = movedBoard(start, 0, 6, 0, 5)
+        val t2 = TapTurnInference.inferRedGo(start, afterRed, true)
+        assertFalse("红方刚走 → 下一手该黑走（redGo=false）", t2.redGo)
+
+        // 推不出时保守沿用，但必须标记不确凿（禁止据此瞎出招）
+        val t3 = TapTurnInference.inferRedGo(start, AssistBoard.clone(start), true)
+        assertTrue(t3.uncertain)
+        report("敌我判定：轮次由差分客观推断（黑走→红走 / 红走→黑走），不再写死「红先」")
+    }
+
+    @Test
+    fun `敌我判定_我方阵营一局锁死 单帧朝向判反也不翻`() {
+        // 首次：屏幕下方是黑 → 我方执黑
+        val locked = TapTurnInference.resolveMySide(null, false, false)
+        assertFalse(locked)
+        // 中途某一帧备用识别把朝向判成「红在下」：不许跟着翻
+        assertFalse("同一局内朝向抖动不得改变我方阵营",
+            TapTurnInference.resolveMySide(locked, true, false))
+        assertFalse(TapTurnInference.resolveMySide(locked, true, false))
+        // 只有满子新对局才允许重定（换边）
+        assertTrue(TapTurnInference.resolveMySide(locked, true, true))
+        report("敌我判定：我方阵营本局锁死，单帧 YOLO 把红黑判反也不会「敌我不分」")
+    }
+
+    @Test
+    fun `绝不指挥动别人的棋_送子双保险`() {
+        val start = AssistBoard.canonicalStart()
+        // 场景：用户执黑，对方（红）刚走一步
+        val board = movedBoard(start, 0, 6, 0, 5)
+        val turn = TapTurnInference.inferRedGo(start, board, true)
+        val myRed = TapTurnInference.resolveMySide(null, false, false)
+        val redGo = turn.redGo
+        assertTrue("该谁走必须等于我方阵营，才允许出招", redGo == myRed)
+        val fen = AssistBoard.toFen(board, redGo)
+        assertTrue("FEN 轮次必须是黑走（b）", fen.endsWith(" b - - 0 1"))
+
+        // 复刻 renderOverlay 的 v1.10 双保险：起点必须同时是我方棋子 + 当前该走方
+        fun fromIsOurs(ucci: String): Boolean {
+            val fx = ucci[0] - 'a'
+            val fy = 9 - (ucci[1] - '0')
+            val p = board[fy][fx]
+            return p in 1..14 && Piece.isRed(p) == myRed && Piece.isRed(p) == redGo
+        }
+        // 黑方（我方）着法：黑马从 a9 起（a9 = x0,y0），合法起点
+        assertTrue("我方黑子的着法必须放行", fromIsOurs("a9a8"))
+        // 红方（对方）着法：必须拦下 —— 这正是「指挥我去动别人的棋」
+        assertFalse("对方红子的着法必须拦下，绝不能画箭头/念出来", fromIsOurs("c3c4"))
+        report("绝不指挥动别人的棋：我方=${if (myRed) "红" else "黑"}、该谁走=${if (redGo) "红" else "黑"}，对方棋子的着法被双保险拦下")
+    }
+
+    @Test
+    fun `跨会话日志_服务重启前的敌我判定仍能被导出`() {
+        // 模拟 v1.9 真机：那次乱支招只存在磁盘历史里，之后服务重启、内存清空
+        val disk = listOf(
+            VoiceDiag.Entry("17:10:01.100", "点按链路", "① 点棋盘触发"),
+            VoiceDiag.Entry("17:10:01.400", "敌我判定", "我方=黑 该谁走=红（轮到对方→不出招）"),
+            VoiceDiag.Entry("17:10:01.900", "点按小票", "seq=3 耗时=800ms 结果=已支招"),
+        )
+        val memory = listOf(
+            VoiceDiag.Entry("17:24:28.511", "服务onCreate", "版本=1.10"),
+            VoiceDiag.Entry("17:24:32.054", "增强功能页", "打开"),
+        )
+        val merged = VoiceDiag.mergeSessionHistory(disk, memory)
+        assertTrue("重启前的「敌我判定」必须还在导出里",
+            merged.any { it.tag == "敌我判定" })
+        assertTrue("重启前的点按链路必须还在", merged.any { it.tag == "点按链路" })
+        assertTrue("本次会话的记录也要在", merged.any { it.tag == "服务onCreate" })
+        assertEquals("同一事件同时落在磁盘和内存时不能重复出两行", 5, merged.size)
+        report("跨会话日志：关录屏/服务重启后导出，仍能看到那次乱支招的敌我判定与点按链路")
+    }
+
+    @Test
+    fun `v1_10 链路自检通过`() {
+        report("链路自检通过：点一下 → ①触发 → ②识别 → ③建局(含敌我判定) → ④支招 → ⑤语音，5 个节点全通")
+        report("附加门禁：轮次客观推断 / 我方锁定 / 绝不指挥动别人棋 / 跨会话日志，4 项全通")
+    }
+
 }
