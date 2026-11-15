@@ -501,4 +501,28 @@ class TapChainTest {
         report("后续支招/念招是自然链路，不额外干预；不查节拍器、不等停稳、不多帧确认、不重放旧帧")
     }
 
+    @Test
+    fun `v1_15 签名固定门禁 不允许再出漂移包`() {
+        fun readSrc(rel: String): String {
+            for (candidate in listOf(rel, rel.removePrefix("app/"))) {
+                val f = java.io.File(candidate)
+                if (f.exists()) return f.readText()
+            }
+            return ""
+        }
+        val fp = readSrc("docs/SIGNING_FINGERPRINT.txt").trim()
+        assertTrue("必须读到固定证书指纹常量", fp.isNotEmpty())
+        assertTrue("指纹必须是 64 位 hex", Regex("^[0-9a-f]{64}$").matches(fp))
+        val wf = readSrc(".github/workflows/cn-build.yml")
+        assertTrue("必须读到发布流水线", wf.isNotEmpty())
+        assertTrue("CI 必须显式注入固定 release 密钥", wf.contains("Restore fixed release signing key"))
+        assertTrue("缺密钥必须失败而不是 warning 继续", wf.contains("固定签名密钥 Secrets 未配齐，禁止出包"))
+        assertTrue("必须有证书指纹硬门禁", wf.contains("Verify fixed signing certificate") && wf.contains("EXPECTED"))
+        assertFalse("绝不能只打印指纹不比对", wf.contains("Print APK signing fingerprints"))
+        assertFalse("发布时不能删掉预建标签", wf.contains("--cleanup-tag"))
+        assertTrue("gradle 的 release 签名配置仍在",
+            readSrc("app/build.gradle.kts").contains("signingConfigs["release"]"))
+        report("签名固定：指纹常量 + CI 显式密钥 + 出包前逐个 APK 比对不一致即失败，杜绝每版换钥匙")
+    }
+
 }

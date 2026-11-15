@@ -1,4 +1,4 @@
-# 象棋迪克 XQDK · 国内增强版 v1.14
+# 象棋迪克 XQDK · 国内增强版 v1.15
 > 本文件是**完整更新说明**（含全部历史版本）。Release 页只放极简摘要 + 折叠要点，避免正文把安装包挤到屏幕下方；摘要模板见 [`docs/RELEASE_BRIEF.md`](RELEASE_BRIEF.md)。
 
 > **本仓库是第三方派生分支，不是官方版本。**
@@ -7,7 +7,50 @@
 > 全部原有代码、设计与文档的著作权归上游作者及贡献者所有，在此致谢；本分支与上游作者无隶属关系，请优先到上游获取正式版本并反馈问题。
 > 上游对接与带日期的同步审计见 [`UPSTREAM.md`](../UPSTREAM.md)；差异化清单见 [`docs/DIFFERENTIATION.md`](DIFFERENTIATION.md)。
 
-源码见 `main`，构建流水线 `Build-CN`，标签 `cn-1.14`。到 [Releases](https://github.com/zjh1934/chess-dike-cn/releases) 自行下载安装包。
+源码见 `main`，构建流水线 `Build-CN`，标签 `cn-1.15`。到 [Releases](https://github.com/zjh1934/chess-dike-cn/releases) 自行下载安装包。
+
+## v1.15 更新内容（签名固定：以后不用再卸载重装）
+
+### 你问的是哪个没固定
+
+> 你这个包是包名没固定，还是什么签名没固定，还是什么东西，我每次都要卸载了再安装，不能覆盖安装。
+
+**是签名没固定。** 包名和版本号都没问题。
+
+沙盒下载 Release 资产被网络策略挡住，所以加了一次性 `Signing audit`，让 GitHub 构建机去下载 cn-1.12 / cn-1.13 / cn-1.14 三个真实安装包，用 `apksigner` + `aapt` 读出来：
+
+| 版本 | applicationId | versionCode | 证书 SHA-256（前 16 位） |
+| --- | --- | --- | --- |
+| cn-1.12 | `com.xqdk.chess` | 43 | `0526d0ed3b3f1b0…` |
+| cn-1.13 | `com.xqdk.chess` | 43 | `fc43a60079ebd74f…` |
+| cn-1.14 | `com.xqdk.chess` | 43 | `15c9480c6f8bd20…` |
+
+**三个包三把不同的证书**，所以 Android 判定「不是同一个签名」，每次都要求先卸载。之前我说「固定签名、可直接覆盖安装」是错的，这里更正。
+
+### 为什么没固定住
+
+主流水线头部注释其实写着「release 构建回退 debug 签名」。`build.gradle.kts` 的 release 签名需要 `app/cchess.release.2026.jks` + `local.properties` 里两个密码；CI 里这些都没有，于是回退到 `signingConfigs.debug`，用 `$HOME/.android/debug.keystore`。虽然配过一个 `DEBUG_KEYSTORE_B64`，但恢复这一步管不住 gradle 的回退逻辑，全新 runner 每次生成一把新 debug 钥匙。而 CI 里的「打印签名指纹」**只是打印、没有比对**，漂移了照样发版。
+
+### 这版怎么修
+
+1. 生成一把本分支专用的固定 release 密钥（RSA 2048 / 30 年），私钥只存在仓库 Secrets（`ANDROID_KEYSTORE_B64` / `CCHES_STORE_PWD` / `CCHES_KEY_PWD`），**不进代码、不进日志**
+2. CI 显式把密钥解码到 `app/cchess.release.2026.jks` 并写 `local.properties`，让 gradle 走 `signingConfigs.release`；三个 Secret 缺任意一个**直接构建失败**，不再有隐式回退
+3. 新增 `docs/SIGNING_FINGERPRINT.txt` 记录固定证书指纹；出包前用 `apksigner verify --print-certs` 逐个 APK 比对，**不一致就 `::error::` 并禁止发布**，指纹同时回传 notice 供核对
+4. 发布时不再 `--cleanup-tag` 删标签，`git describe` 能拿到干净的 `versionName`
+
+固定证书 SHA-256：`3f612a1d496d898617c1eee9fed3642b1e9c5ed2d72cab1bfdc6b7f5beba1a57`
+
+### ⚠️ 这次必须卸载一次
+
+v1.14 及以前那几把钥匙都是临时构建机现场生成、用完即毁，找不回来了。所以 **v1.14 → v1.15 仍需卸载再装，这是最后一次**。装上 v1.15 之后，v1.16、v1.17…… 全部同一把钥匙，直接覆盖安装，配置不丢。
+
+### 没动的部分
+
+点按即时抓帧、单帧直出与合法门槛、面板「我方 红/黑」互斥锁定、按我方回合请求、起点双保险、一次点按只念定着一招、定着超时必给一招、一键关录屏、Release 页极简正文 —— 全部保留。
+
+---
+
+以下 v1.5~v1.14 各节是历史说明；行为一律以本文最上方 v1.15 节为准。
 
 ## v1.14 更新内容（插入点修正：点下去就读当前屏幕，不再拿旧帧）
 
@@ -42,8 +85,6 @@
 点按抓帧绕过全部帧闸门、插入点在帧回调且缓存帧无条件刷新、5 节点链路（点一下 → 抓当前屏幕 → 识别 → 建局 → 支招 → 念「炮二平五」）—— 全绿才准出包。
 
 ---
-
-以下 v1.5~v1.13 各节是历史说明；行为一律以本文最上方 v1.14 节为准。
 
 ## v1.13 更新内容（换盘串色：面板上一键锁定我方红/黑）
 

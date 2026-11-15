@@ -4,11 +4,14 @@
 #  - 不下载 assets Release 里的 ONNX 模型 / 桔库开局库，也不做 sha256 自检。
 #    这些资产受版权保护不随源码分发；缺失时 App 按 README 约定自动降级
 #    （识别回退 YOLO、连线降级纯引擎），不影响编译与基本使用。
-#  - 不注入官方签名密钥，release 构建由 app/build.gradle.kts 回退 debug 签名，
-#    产物可直接安装，但不能覆盖安装官方签名版。
+#  - 不注入官方签名密钥；v1.15 起注入**本分支自己的固定 release 密钥**
+#    （Secrets: ANDROID_KEYSTORE_B64 / CCHES_STORE_PWD / CCHES_KEY_PWD），
+#    出包前用 apksigner 比对证书指纹硬门禁，不一致直接失败 —— 保证各版本可覆盖安装。
+#    （v1.14 及以前实际回退到全新 runner 自动生成的 debug.keystore，每版签名都不同，
+#     用户每次都必须卸载重装；已由 Signing audit 实测确认。）
 #  - 手动触发时由 runner 直接把 APK 挂到 Release 页（不经沙盒中转运大文件）；
 #    用 gh release create 而非推送 v* tag，避免命中 android.yml 的 tags: ["v*"]。
-#    本分支标签统一用 cn- 前缀（如 cn-1.14），天然不命中该规则。
+#    本分支标签统一用 cn- 前缀（如 cn-1.15），天然不命中该规则。
 #
 # 触发：push 到 main（常规开发，仅编译+单测+出 artifact）或手动 workflow_dispatch（发布）。
 name: Build-CN
@@ -30,7 +33,7 @@ on:
         description: 'Release 标签名（cn- 前缀，不以 v 开头，避免触发上游 Build-XQDK 流水线）'
         type: string
         required: false
-        default: 'cn-1.14'
+        default: 'cn-1.15'
 
 permissions:
   contents: write
@@ -59,21 +62,27 @@ jobs:
       - name: Accept SDK licenses
         run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
 
-      # 固定签名（v1.3 起）：release 无官方密钥时回退 debug 签名，而 debug 签名默认
-      # 使用 $HOME/.android/debug.keystore。每次全新 runner 自动生成的该文件导致
-      # 各版本签名不一致（覆盖安装冲突，用户被迫卸载重装）。这里用仓库 Secrets 里的
-      # 固定钥匙预置该文件——不改任何上游构建脚本，所有版本签名一致，可直接覆盖安装。
-      - name: Restore fixed debug keystore
+      # v1.15 固定签名（根治「每次都要卸载重装」）：
+      # 之前只恢复了 $HOME/.android/debug.keystore，但 gradle 的 release 配置缺
+      # local.properties 时仍回退 debug 签名；全新 runner 会生成一把新钥匙，
+      # Signing audit 实测 cn-1.12/1.13/1.14 三个包证书 SHA-256 全不相同。
+      # 现在显式注入本分支 release 密钥（jks + 两个密码），让 build.gradle.kts
+      # 走 signingConfigs.release，不再有任何隐式回退；缺任一 Secret 直接失败。
+      - name: Restore fixed release signing key
         env:
-          DEBUG_KEYSTORE_B64: ${{ secrets.DEBUG_KEYSTORE_B64 }}
+          SIGNING_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          CCHES_STORE_PWD: ${{ secrets.CCHES_STORE_PWD }}
+          CCHES_KEY_PWD: ${{ secrets.CCHES_KEY_PWD }}
         run: |
-          if [ -n "$DEBUG_KEYSTORE_B64" ]; then
-            mkdir -p "$HOME/.android"
-            printf '%s' "$DEBUG_KEYSTORE_B64" | base64 -d > "$HOME/.android/debug.keystore"
-            ls -l "$HOME/.android/debug.keystore"
-          else
-            echo "::warning::DEBUG_KEYSTORE_B64 未配置，本包签名不由固定钥匙签出"
+          set -euo pipefail
+          if [ -z "${SIGNING_KEYSTORE_B64:-}" ] || [ -z "${CCHES_STORE_PWD:-}" ] || [ -z "${CCHES_KEY_PWD:-}" ]; then
+            echo "::error::固定签名密钥 Secrets 未配齐，禁止出包（否则又是一把新钥匙，用户又得卸载重装）"
+            exit 1
           fi
+          printf '%s' "$SIGNING_KEYSTORE_B64" | base64 -d > app/cchess.release.2026.jks
+          printf 'CCHES_STORE_PWD=%s\nCCHES_KEY_PWD=%s\n' "$CCHES_STORE_PWD" "$CCHES_KEY_PWD" > local.properties
+          keytool -list -keystore app/cchess.release.2026.jks -storepass "$CCHES_STORE_PWD" -alias cchess2026 >/dev/null
+          echo "固定 release 钥匙已注入（alias=cchess2026）；私钥不入库、不进日志"
 
       - name: Unit tests
         # 失败时把关键错误行回传成 check-run annotations：无需下载被网络策略拦截的
@@ -135,15 +144,24 @@ jobs:
             fi
           done
 
-      # 打印每个 APK 的签名证书 SHA-256 指纹：与本分支固定钥匙指纹一致即证明
-      # "签名固定"生效，用户核对两版指纹相同即可放心覆盖安装
-      - name: Print APK signing fingerprints
+      # v1.15 硬门禁：只「打印」指纹挡不住漂移（v1.14 及以前就是打印完照发）。
+      # 现在把每个 APK 的证书 SHA-256 与 docs/SIGNING_FINGERPRINT.txt 逐一比对，
+      # 不一致直接失败并回传 error —— 从机制上保证以后每版都能覆盖安装。
+      - name: Verify fixed signing certificate
         run: |
+          set -euo pipefail
           BT="$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -1)"
+          EXPECTED="$(tr -d '[:space:]' < docs/SIGNING_FINGERPRINT.txt)"
           for f in dist/*.apk; do
-            echo "== $f"
-            "$BT/apksigner" verify --print-certs "$f" | grep -E 'SHA-256' | head -2
+            FP="$("$BT/apksigner" verify --print-certs "$f" \
+              | grep 'SHA-256 digest:' | head -1 | awk '{print $NF}' | tr -d ':' | tr -d '[:space:]')"
+            echo "::notice::签名指纹 $(basename "$f") = $FP"
+            if [ "$FP" != "$EXPECTED" ]; then
+              echo "::error::签名证书与固定钥匙不一致（$FP != $EXPECTED）；本包会让用户必须卸载重装，禁止发布"
+              exit 1
+            fi
           done
+          echo "签名一致：全部 APK 均由固定钥匙签出，可覆盖安装"
 
       - name: Upload APK artifacts
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -158,20 +176,21 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ inputs.release_tag }}
-          RELEASE_TITLE: '象棋迪克 XQDK · 国内增强版 v1.14'
+          RELEASE_TITLE: '象棋迪克 XQDK · 国内增强版 v1.15'
         run: |
           set -euo pipefail
-          TAG="${RELEASE_TAG:-cn-1.14}"
+          TAG="${RELEASE_TAG:-cn-1.15}"
           echo "发布标签: $TAG"
           echo "产物清单:"
           ls -lh dist/
           # 幂等：同名 Release 已存在则先删除旧资产，再重建
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "同名 Release 已存在，删除后重建"
-            gh release delete "$TAG" --yes --cleanup-tag
+            # 不删 tag：保留预建标签，git describe 才能给出干净的 versionName
+            gh release delete "$TAG" --yes
           fi
-          # v1.14 起：Release 正文只放极简摘要。之前用整份 docs/RELEASE.md
-          # （累积全部版本历史，v1.14 时 364 行），正文把 Assets 下载区压到屏幕外，
+          # cn-1.13 重建起：Release 正文只放极简摘要。之前用整份 docs/RELEASE.md
+          # （累积全部版本历史，cn-1.13 时 364 行），正文把 Assets 下载区压到屏幕外，
           # 用户要一直往下翻才能找到安装包。改成短模板 + <details> 折叠 +
           # 超链接引到仓库里的完整文档；Assets 紧跟正文，不用翻。
           VER="${TAG#cn-}"
