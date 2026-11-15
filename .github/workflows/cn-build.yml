@@ -8,7 +8,7 @@
 #    产物可直接安装，但不能覆盖安装官方签名版。
 #  - 手动触发时由 runner 直接把 APK 挂到 Release 页（不经沙盒中转运大文件）；
 #    用 gh release create 而非推送 v* tag，避免命中 android.yml 的 tags: ["v*"]。
-#    本分支标签统一用 cn- 前缀（如 cn-1.10），天然不命中该规则。
+#    本分支标签统一用 cn- 前缀（如 cn-1.11），天然不命中该规则。
 #
 # 触发：push 到 main（常规开发，仅编译+单测+出 artifact）或手动 workflow_dispatch（发布）。
 name: Build-CN
@@ -30,7 +30,7 @@ on:
         description: 'Release 标签名（cn- 前缀，不以 v 开头，避免触发上游 Build-XQDK 流水线）'
         type: string
         required: false
-        default: 'cn-1.10'
+        default: 'cn-1.11'
 
 permissions:
   contents: write
@@ -155,10 +155,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ inputs.release_tag }}
-          RELEASE_TITLE: '象棋迪克 XQDK · 国内增强版 v1.10'
+          RELEASE_TITLE: '象棋迪克 XQDK · 国内增强版 v1.11'
         run: |
           set -euo pipefail
-          TAG="${RELEASE_TAG:-cn-1.10}"
+          TAG="${RELEASE_TAG:-cn-1.11}"
           echo "发布标签: $TAG"
           echo "产物清单:"
           ls -lh dist/

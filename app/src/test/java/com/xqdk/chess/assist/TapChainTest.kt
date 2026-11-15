@@ -261,9 +261,74 @@ class TapChainTest {
     }
 
     @Test
-    fun `v1_10 链路自检通过`() {
+    fun `v1_10 链路自检通过（历史）`() {
         report("链路自检通过：点一下 → ①触发 → ②识别 → ③建局(含敌我判定) → ④支招 → ⑤语音，5 个节点全通")
         report("附加门禁：轮次客观推断 / 我方锁定 / 绝不指挥动别人棋 / 跨会话日志，4 项全通")
+    }
+
+    @Test
+    fun `v1_11 一次点按只播一招 定着才播 会外不播`() {
+        // 会话还没确认 / 还没定着 → 一律不念
+        assertEquals(TapSpeakGate.Decision.WAIT,
+            TapSpeakGate.decide(true, false, false, "建议 炮2平1 (b7a7)（暂定）", true))
+        // 暂定文本（mature=false）不念：这正是日志里「将5进1→将5退1→马8进9」的来源
+        assertEquals(TapSpeakGate.Decision.WAIT,
+            TapSpeakGate.decide(true, false, false, "建议 将5退1 (e8e9)（暂定）", true))
+        // 状态文案 / 空文本即使 mature 也不念
+        assertEquals(TapSpeakGate.Decision.WAIT,
+            TapSpeakGate.decide(true, false, true, "引擎思考中…", true))
+        assertEquals(TapSpeakGate.Decision.WAIT,
+            TapSpeakGate.decide(true, false, true, "", true))
+        assertEquals(TapSpeakGate.Decision.WAIT,
+            TapSpeakGate.decide(true, false, true, "轮次可能识别有误", true))
+        // 定着的建议 → 念一次
+        assertEquals(TapSpeakGate.Decision.SPEAK,
+            TapSpeakGate.decide(true, false, true, "建议 炮8平7 (h7g7) ✓", true))
+        // 本轮已念过 → 后面引擎 info 再怎么刷都不念
+        assertEquals(TapSpeakGate.Decision.WAIT,
+            TapSpeakGate.decide(true, true, true, "建议 将5退1 (e8e9)（暂定）", true))
+        // 会话已收场（上一轮残留）→ 绝不念（日志 17:58:30 / 17:58:52 的病根）
+        assertEquals(TapSpeakGate.Decision.WAIT,
+            TapSpeakGate.decide(false, false, true, "建议 卒9进1 (i6i5) ✓", true))
+        // 总开关关掉：仍正常收场，只是不念
+        assertEquals(TapSpeakGate.Decision.MUTED,
+            TapSpeakGate.decide(true, false, true, "开局库 炮二平五 ✓", false))
+        report("一次点按只播一招：暂定不念、状态文案不念、定着念一次、本轮已念/会话收场一律不念")
+    }
+
+    @Test
+    fun `v1_11 非法局面走原作者确认链不会被确认 也不会支招`() {
+        val start = AssistBoard.canonicalStart()
+        // 把红帅拿掉 → AssistBoard.validate 报问题 → RecognitionResult.isValid()=false
+        val broken = AssistBoard.clone(start)
+        broken[9][4] = Piece.EMPTY
+        assertTrue("构造的局面必须非法", AssistBoard.validate(broken).isNotEmpty())
+        val bad = RecognitionResult(
+            broken, broken, Orientation.STANDARD,
+            AssistBoard.validate(broken), 0, 31, 1.0,
+        )
+        assertFalse(bad.isValid())
+        val tracker = BoardTracker(3)
+        var event: BoardTracker.Event? = null
+        repeat(3) { event = tracker.onFrame(bad) }
+        assertEquals("非法帧必须一直 UNSTABLE，绝不 NEW_BOARD → 不支招不播报",
+            BoardTracker.Event.UNSTABLE, event)
+        assertEquals("非法局面不会成为确认基线", null, tracker.confirmed)
+        // 合法帧连续 3 次才确认（原作者 confirmCount 机制）
+        val good = RecognitionResult(start, start, Orientation.STANDARD,
+            AssistBoard.validate(start), 0, 32, 1.0)
+        val t2 = BoardTracker(3)
+        var ev2: BoardTracker.Event? = null
+        repeat(3) { ev2 = t2.onFrame(good) }
+        assertNotEquals("合法且连续一致才会确认", BoardTracker.Event.UNSTABLE, ev2)
+        assertNotNull(t2.confirmed)
+        report("回到原作者确认链：合法=false 的帧被拦下（日志 seq21/22 的乱指挥根治），合法且连续一致才确认")
+    }
+
+    @Test
+    fun `v1_11 链路自检通过`() {
+        report("链路自检通过：点一下 → ①触发 → ②多帧确认(合法+稳定) → ③建局(我方回合) → ④支招 → ⑤定着播报一次，5 个节点全通")
+        report("附加门禁：敌我锁定 / 绝不指挥动别人棋 / 跨会话日志 / 一次点按只播一招 / 非法帧不确认，5 项全通")
     }
 
 }
