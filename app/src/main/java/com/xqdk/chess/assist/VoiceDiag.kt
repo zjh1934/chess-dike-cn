@@ -21,7 +21,7 @@ import java.util.Locale
  * 完全看不出点按、闸口、识别、确认、支招哪一步断了，没有参考价值。
  *
  * 记录项：
- * - 配置快照（版本 / 包名 / 识别方式档位 / 各开关 / 播报内容掩码）
+ * - 配置快照（版本 / 包名 / 不点棋盘是否自动识别 + 点棋盘动作 / 各开关 / 播报内容掩码）
  * - 面板动作（点棋盘是否派发到服务、当时档位与闸口状态）
  * - 点按出招会话（单帧直出启动 / 拒绝原因 / 首帧可用 / 连点取代 / 异常卡住收场）
  * - **点按小票**：每次点按一行总账（耗时 / 结果 / 识别次数 / 拦下次数 / 引擎 / 档位）
@@ -59,7 +59,7 @@ object VoiceDiag {
 
     /** 增强功能诊断模块稳定版本标识（我们自己的版本，不受 git describe 派生干扰）。
      *  常量名沿用 v1.2 的 VOICE_MODULE_VERSION 以兼容既有单测与导出文档字段。 */
-    const val VOICE_MODULE_VERSION = "1.7"
+    const val VOICE_MODULE_VERSION = "1.9"
 
     /** 最近一次 [export] 导出文件路径（成功为可展示路径；失败/未导出为 null） */
     @Volatile
@@ -164,8 +164,11 @@ object VoiceDiag {
         }
         val ver = displayVersion(rawVer)
         val exportTime = synchronized(STAMP) { STAMP.format(Date()) }
+        // v1.8：头部写「导出时」的两个独立维度组合，不再只写一个档位名；
+        // 与「服务 onCreate」快照不同属正常（运行中改过配置），见下方说明行
         val tapModeLabel = try {
-            TapMode.labelOf(AssistConfig(context).tapMode)
+            val c = AssistConfig(context)
+            TapMode.summary(c.tapMode, c.autoTapEnabled)
         } catch (_: Throwable) { "?" }
         val doc = buildExportDocument(device, ver, Build.VERSION.SDK_INT, exportTime, rows)
         // 头部信息区补全：不改纯函数 buildExportDocument（单测锁定其字段），
@@ -284,15 +287,17 @@ object VoiceDiag {
 
     /** 诊断覆盖说明（纯函数）：写进文档头部与 onCreate 快照，一眼看清这份日志能查什么 */
     fun scopeLine(): String =
-        "点按出招会话 / 点按小票 / 识别结果 / 识别闸口 / 识别帧丢弃原因 / 识别引擎 / " +
-            "棋盘确认 / 支招调度 / 中文播报 / 状态文案 / 面板动作 / 录屏停止 / 配置变更 / 导出"
+        "点按链路（①触发→②识别→③建局→④支招→⑤播报）/ 点按出招会话 / 点按小票 / 识别结果 / " +
+            "识别闸口 / 识别帧丢弃原因 / 识别引擎 / 棋盘确认 / 支招调度 / 中文播报 / " +
+            "状态文案 / 面板动作 / 录屏停止 / 配置变更 / 导出"
 
-    /** 文档头部信息区（纯函数）：版本、包名、诊断模块版本、识别方式、覆盖范围 */
+    /** 文档头部信息区（纯函数）：版本、包名、诊断模块版本、识别设置、覆盖范围 */
     fun metaBlock(ver: String, tapModeLabel: String): String =
         "- 诊断模块版本：$VOICE_MODULE_VERSION\n" +
             "- 版本：$ver\n" +
             "- 包名：com.xqdk.chess\n" +
             "- 识别方式：$tapModeLabel\n" +
+            "- 识别设置说明：导出时为当前配置；服务启动态见「服务onCreate」行，运行中切换见「档位同步」行（v1.8 起立即生效）\n" +
             "- 诊断覆盖：${scopeLine()}\n"
 
     /** 组装完整导出文档：标题 + 隐私提示 + 设备/版本信息 + 表头 + 全部行（纯函数）。 */

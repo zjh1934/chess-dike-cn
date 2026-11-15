@@ -16,9 +16,10 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 
 /**
- * v1.5「增强功能」统一开关页的运行时证据：把 ACTION_DOWN/ACTION_UP 派发给
- * OverlayPanelView 里的迷你棋盘，验证 tapMode 四档 → panel.onAction 的分发结果。
- * 四档互斥、手动摆棋优先，这是「开关真的接通」而非「只放了个按钮」的回归保证。
+ * v1.9「点一下就出招」的运行时证据：把 ACTION_DOWN/ACTION_UP 派发给
+ * OverlayPanelView 里的迷你棋盘，验证**任何历史档位 / 快捷刷新开关下**都只派发
+ * TAP_SUGGEST（识别→支招→播报），不再被劫持成 FLIP_TURN / CYCLE_CANDIDATE。
+ * 手动摆棋模式仍优先。端到端链路自检见 TapChainTest。
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], qualifiers = "w440dp-h920dp-440dpi")
@@ -62,38 +63,38 @@ class FeatureSwitchesLinkTest {
     }
 
     @Test
-    fun `点按刷新档派发 FLIP_TURN`() {
+    fun `v1_9 旧点按刷新档也派发出招`() {
         val (panel, chess) = newPanel()
         val actions = mutableListOf<OverlayAction>()
         panel.onAction = { actions += it }
         panel.tapMode = TapMode.TAP_REFRESH
         tapChess(chess)
-        assertEquals(listOf(OverlayAction.FLIP_TURN), actions)
+        assertEquals(listOf(OverlayAction.TAP_SUGGEST), actions)
     }
 
     @Test
-    fun `点按变招档派发 CYCLE_CANDIDATE`() {
+    fun `v1_9 旧点按变招档也派发出招-不再劫持成切候选`() {
         val (panel, chess) = newPanel()
         val actions = mutableListOf<OverlayAction>()
         panel.onAction = { actions += it }
         panel.tapMode = TapMode.TAP_CANDIDATE
         tapChess(chess)
-        assertEquals(listOf(OverlayAction.CYCLE_CANDIDATE), actions)
+        assertEquals(listOf(OverlayAction.TAP_SUGGEST), actions)
     }
 
     @Test
-    fun `自动识别档按点按刷新开关决定手势`() {
+    fun `v1_9 旧自动识别档两种快捷刷新开关都派发出招`() {
         val (panel, chess) = newPanel()
         val actions = mutableListOf<OverlayAction>()
         panel.onAction = { actions += it }
         panel.tapMode = TapMode.AUTO
         panel.quickRefreshEnabled = true
         tapChess(chess)
-        assertEquals(listOf(OverlayAction.FLIP_TURN), actions)
+        assertEquals(listOf(OverlayAction.TAP_SUGGEST), actions)
         actions.clear()
         panel.quickRefreshEnabled = false
         tapChess(chess)
-        assertEquals(listOf(OverlayAction.CYCLE_CANDIDATE), actions)
+        assertEquals(listOf(OverlayAction.TAP_SUGGEST), actions)
     }
 
     @Test

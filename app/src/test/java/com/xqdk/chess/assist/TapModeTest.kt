@@ -7,8 +7,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * 「识别方式」四选一（v1.5）行为决策的纯 JVM 单测。
- * 核心不变量：默认点按出招（不点不动）、四档互斥且脏值归位、手动摆棋优先。
+ * v1.9「开箱即用」行为决策的纯 JVM 单测。
+ * 核心不变量：**点棋盘永远派发 RECOGNIZE**（不管旧档位/脏值/快捷刷新开关），
+ * 手动摆棋模式仍优先；旧常量与旧配置值只为迁移兼容保留，不再影响手势。
  */
 class TapModeTest {
 
@@ -42,12 +43,14 @@ class TapModeTest {
     }
 
     @Test
-    fun `点按出招派发 RECOGNIZE-其余三档各自派发`() {
-        assertEquals(Action.RECOGNIZE, TapMode.resolveAction(TapMode.TAP_SUGGEST, false, true))
-        assertEquals(Action.REFRESH, TapMode.resolveAction(TapMode.TAP_REFRESH, false, false))
-        assertEquals(Action.CANDIDATE, TapMode.resolveAction(TapMode.TAP_CANDIDATE, false, true))
-        assertEquals(Action.REFRESH, TapMode.resolveAction(TapMode.AUTO, false, true))
-        assertEquals(Action.CANDIDATE, TapMode.resolveAction(TapMode.AUTO, false, false))
+    fun `v1_9 任何旧档位点棋盘都派发 RECOGNIZE-链路不再被劫持`() {
+        val modes: List<String?> = TapMode.ALL + listOf<String?>(null, "garbage")
+        for (m in modes) {
+            for (quick in listOf(true, false)) {
+                assertEquals("mode=$m quickRefresh=$quick 必须走识别支招链",
+                    Action.RECOGNIZE, TapMode.resolveAction(m, false, quick))
+            }
+        }
     }
 
     @Test
@@ -72,5 +75,25 @@ class TapModeTest {
     fun `switchText 开与关`() {
         assertEquals("开", TapMode.switchText(true))
         assertEquals("关", TapMode.switchText(false))
+    }
+
+    @Test
+    fun `v1_8 点棋盘动作只允许前三档 AUTO 与脏值归位`() {
+        assertEquals(TapMode.TAP_SUGGEST, TapMode.normalizeAction(TapMode.TAP_SUGGEST))
+        assertEquals(TapMode.TAP_REFRESH, TapMode.normalizeAction(TapMode.TAP_REFRESH))
+        assertEquals(TapMode.TAP_CANDIDATE, TapMode.normalizeAction(TapMode.TAP_CANDIDATE))
+        // 历史「自动识别」是第四档，v1.8 拆成独立开关后不再作为点棋盘动作
+        assertEquals(TapMode.TAP_SUGGEST, TapMode.normalizeAction(TapMode.AUTO))
+        assertEquals(TapMode.TAP_SUGGEST, TapMode.normalizeAction(null))
+        assertEquals(TapMode.TAP_SUGGEST, TapMode.normalizeAction("garbage"))
+    }
+
+    @Test
+    fun `v1_9 摘要固定一句话-任何旧配置都不改变行为`() {
+        val expected = "不点棋盘完全不动 ＋ 点一下棋盘＝这一帧直接算 → 支招 → 语音播报"
+        assertEquals(expected, TapMode.summary())
+        assertEquals(expected, TapMode.summary(TapMode.AUTO, true))
+        assertEquals(expected, TapMode.summary(TapMode.TAP_CANDIDATE, false))
+        assertTrue(TapMode.hintOf(TapMode.AUTO).contains("不用设置"))
     }
 }

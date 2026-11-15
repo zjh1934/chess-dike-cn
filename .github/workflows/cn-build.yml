@@ -8,7 +8,7 @@
 #    产物可直接安装，但不能覆盖安装官方签名版。
 #  - 手动触发时由 runner 直接把 APK 挂到 Release 页（不经沙盒中转运大文件）；
 #    用 gh release create 而非推送 v* tag，避免命中 android.yml 的 tags: ["v*"]。
-#    本分支标签统一用 cn- 前缀（如 cn-1.7），天然不命中该规则。
+#    本分支标签统一用 cn- 前缀（如 cn-1.9），天然不命中该规则。
 #
 # 触发：push 到 main（常规开发，仅编译+单测+出 artifact）或手动 workflow_dispatch（发布）。
 name: Build-CN
@@ -30,7 +30,7 @@ on:
         description: 'Release 标签名（cn- 前缀，不以 v 开头，避免触发上游 Build-XQDK 流水线）'
         type: string
         required: false
-        default: 'cn-1.7'
+        default: 'cn-1.9'
 
 permissions:
   contents: write
@@ -89,6 +89,23 @@ jobs:
             exit 1
           fi
 
+      - name: 点棋盘链路自检（打包前必须走通）
+        # 用户要求「打包之前自己过一遍流程：模拟点点击，看它触发了什么、反馈给我什么」。
+        # 跑 TapChainTest（-i 让 println 进日志），把 [点按链路] 每一步回传成 check-run
+        # notice；测试失败 / 报告缺失则本步骤失败，Assemble 不会执行 → 不出坏包。
+        run: |
+          set -o pipefail
+          bash gradlew :app:testArmv8-dotprodDebugUnitTest \
+            --tests "com.xqdk.chess.assist.TapChainTest" \
+            --no-daemon --console=plain -i 2>&1 | tee /tmp/tap_chain.log
+          if ! grep -q '链路自检通过' /tmp/tap_chain.log; then
+            echo "::error::链路自检报告缺失：TapChainTest 可能没真正执行，禁止出包"
+            exit 1
+          fi
+          grep '\[点按链路\]' /tmp/tap_chain.log | head -20 | while IFS= read -r line; do
+            echo "::notice::$line"
+          done
+
       - name: Assemble Release APKs
         run: bash gradlew assembleArmv8Release assembleArmv8-dotprodRelease --no-daemon --console=plain
 
@@ -138,10 +155,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ inputs.release_tag }}
-          RELEASE_TITLE: '象棋迪克 XQDK · 国内增强版 v1.7'
+          RELEASE_TITLE: '象棋迪克 XQDK · 国内增强版 v1.9'
         run: |
           set -euo pipefail
-          TAG="${RELEASE_TAG:-cn-1.7}"
+          TAG="${RELEASE_TAG:-cn-1.9}"
           echo "发布标签: $TAG"
           echo "产物清单:"
           ls -lh dist/

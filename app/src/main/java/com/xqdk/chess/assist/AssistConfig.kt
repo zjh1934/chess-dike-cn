@@ -138,31 +138,44 @@ class AssistConfig(context: Context) {
         set(value) { sp.edit().putInt(KEY_VOICE_READ_MASK, value).apply() }
 
     /**
-     * 「识别方式」四选一（v1.5 统一开关页的主项，默认「点按出招」）。
-     * 见 [TapMode]：点按出招 / 点按刷新 / 点按变招 / 自动识别，四档互斥。
-     * 服务每次 render 现读，设置页热改即时生效。
+     * v1.9「开箱即用」：**行为固定，不再有可选档位**。
      *
-     * 旧版本迁移：未存过 tapMode 时，按 v1.4 的「点按识别」开关与 v1.3 的
-     * 「快捷刷新」开关折算成对应档位，老用户升级不会静默回到自动识别。
+     * 不管旧版本存过什么（v1.5~v1.7 的 AUTO / 点按变招 / 点按刷新 / 脏值，
+     * 或 v1.8 的 autoTapEnabled=true），读配置时一律幂等归位成
+     * 「点按出招 + 不点不动」。这是用户实测「装上点一下没用」的根治：
+     * 旧档位会把点棋盘劫持成「切候选」，把识别推理支招播报整条链断掉。
      */
     var tapMode: String
         get() {
-            val raw = sp.getString(KEY_TAP_MODE, null)
-            if (TapMode.isValid(raw)) return raw!!
-            val legacyTap = sp.getBoolean(LEGACY_KEY_TAP_TRIGGER, true)
-            val legacyRefresh = sp.getBoolean(KEY_QUICK_REFRESH_ENABLED, QuickRefresh.DEFAULT_ENABLED)
-            return when {
-                legacyTap -> TapMode.TAP_SUGGEST
-                legacyRefresh -> TapMode.TAP_REFRESH
-                else -> TapMode.TAP_CANDIDATE
-            }
+            normalizeToFixedBehavior()
+            return TapMode.TAP_SUGGEST
         }
-        set(value) { sp.edit().putString(KEY_TAP_MODE, TapMode.normalize(value)).apply() }
+        set(_) { sp.edit().putString(KEY_TAP_MODE, TapMode.TAP_SUGGEST).apply() }
+
+    /** v1.9：不点棋盘时永远不自动识别（零识别 / 零推理 / 零支招 / 零朗读）。 */
+    var autoTapEnabled: Boolean
+        get() {
+            normalizeToFixedBehavior()
+            return false
+        }
+        set(_) { sp.edit().putBoolean(KEY_AUTO_TAP_ENABLED, false).apply() }
+
+    /** 幂等迁移：任何非固定行为的旧配置都写回归位，老用户升级后立刻好用。 */
+    private fun normalizeToFixedBehavior() {
+        val stored = sp.getString(KEY_TAP_MODE, null)
+        val auto = sp.getBoolean(KEY_AUTO_TAP_ENABLED, false)
+        if (stored != TapMode.TAP_SUGGEST || auto) {
+            sp.edit()
+                .putString(KEY_TAP_MODE, TapMode.TAP_SUGGEST)
+                .putBoolean(KEY_AUTO_TAP_ENABLED, false)
+                .apply()
+        }
+    }
 
     /**
      * 「自动识别」档下点棋盘做什么（默认开 = 点按刷新，关 = 点按变招）。
-     * 前三档（点按出招/刷新/变招）由 [tapMode] 直接决定，不读此项。
-     * 保留此开关用于兼容 v1.3「快捷刷新」配置，且让自动识别档的手势也可配置。
+     * v1.8 起仅作 v1.3「快捷刷新」旧配置兼容保留；实际点棋盘动作统一由 [tapMode] 决定，
+     * 设置页不再展示这一项（避免和「点棋盘时做什么」重复、语义打架）。
      */
     var quickRefreshEnabled: Boolean
         get() = sp.getBoolean(KEY_QUICK_REFRESH_ENABLED, QuickRefresh.DEFAULT_ENABLED)
@@ -190,6 +203,8 @@ class AssistConfig(context: Context) {
         private const val KEY_VOICE_READ_MASK = "voice_read_mask"
         private const val KEY_QUICK_REFRESH_ENABLED = "quick_refresh_enabled"
         private const val KEY_TAP_MODE = "tap_mode"
+        /** v1.8：不点棋盘时是否自动识别（独立开关，与 tap_mode 不再互斥） */
+        private const val KEY_AUTO_TAP_ENABLED = "auto_tap_enabled"
         /** v1.4 遗留键，仅用于首次读取时迁移，不再写入 */
         private const val LEGACY_KEY_TAP_TRIGGER = "tap_trigger_enabled"
     }

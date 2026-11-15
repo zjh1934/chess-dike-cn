@@ -22,17 +22,19 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * 增强功能（v1.5 统一开关页）：把本分支相对上游自研的功能**全部集中在一页**，
- * 每项都有独立开关。取代旧的「语音设置」页（VoiceSettingsActivity）：
+ * 增强功能（v1.9 开箱即用）：**识别行为永久固定，没有任何档位开关**。
  *
- * - 识别方式四档互斥（点按出招 / 点按刷新 / 点按变招 / 自动识别），呈现为四个
- *   「开/关」按钮，点一档为开、其余自动变关；当前档位的说明文字随选择刷新。
- * - 自动识别档下的点棋盘行为（点按刷新 开/关）。
- * - 中文播报：总开关 / 引擎 / 内容多选 / 试听。
- * - 诊断工具：增强功能诊断开关 / 自选路径导出 MD / 清空。
+ * 用户原话：「那么多复杂的设置我也看不懂啊，有必要吗？……我要的就是能用」。
+ * v1.5~v1.8 的四选一互斥 / 两维度开关会把点棋盘劫持成「切候选」，把
+ * 「识别 → 推理 → 支招 → 语音播报」整条链断掉，实测就是「点一下没用」。
+ * v1.9 起页面第一屏只写清「怎么用」，一个识别选项都不放：
+ *
+ * - **点一下棋盘 = 这一帧直接算 → 支招 → 语音播报；不点棋盘完全不动。**
+ * - 中文播报：总开关（默认开）/ 引擎 / 内容多选 / 试听 —— 默认已配好，不用改。
+ * - 诊断工具：增强功能诊断开关 / 自选路径导出 MD / 清空（排障时用）。
  * - 构建期固定项（包名锁定、固定签名）只读展示，明确不是运行时开关。
  *
- * 全部配置写 AssistConfig（同一 assist_settings），服务每次 render 现读，热改即时生效。
+ * 旧配置由 AssistConfig 读取时幂等归位，老用户覆盖安装后立刻好用。
  */
 class FeatureSwitchesActivity : AppCompatActivity() {
 
@@ -43,9 +45,8 @@ class FeatureSwitchesActivity : AppCompatActivity() {
     private lateinit var cfg: AssistConfig
     private lateinit var readCheckBoxes: List<Pair<CheckBox, VoicePrompt.Category>>
 
-    /** 四档互斥按钮 → 档位值，统一回填「开/关」 */
-    private lateinit var modeButtons: List<Pair<Button, String>>
-    private lateinit var modeHint: TextView
+    // v1.9：识别行为永久固定，页面不再有任何档位开关、也不再需要服务引用。
+    // 旧配置由 AssistConfig 在读取时幂等归位，老用户升级后直接点棋盘就好用。
 
     private val exportLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -56,45 +57,19 @@ class FeatureSwitchesActivity : AppCompatActivity() {
         setContentView(R.layout.feature_switches)
         cfg = AssistConfig(applicationContext)
         VoiceDiag.log(applicationContext, "增强功能页",
-            "打开 识别方式=${TapMode.labelOf(cfg.tapMode)} 支招播报=${cfg.voiceEnabled} " +
+            "打开 固定行为=${TapMode.summary()} 支招播报=${cfg.voiceEnabled} " +
                 "播报内容mask=${cfg.voiceReadMask} 诊断=${cfg.voiceDiagEnabled}")
 
         findViewById<Button>(R.id.btn_fs_back).setOnClickListener { finish() }
 
-        // ---- 1. 识别方式（四选一互斥） ----
-        modeButtons = listOf(
-            findViewById<Button>(R.id.btn_mode_suggest) to TapMode.TAP_SUGGEST,
-            findViewById<Button>(R.id.btn_mode_refresh) to TapMode.TAP_REFRESH,
-            findViewById<Button>(R.id.btn_mode_candidate) to TapMode.TAP_CANDIDATE,
-            findViewById<Button>(R.id.btn_mode_auto) to TapMode.AUTO,
-        )
-        modeHint = findViewById(R.id.tv_mode_hint)
-        refreshModeButtons()
-        modeButtons.forEach { (btn, mode) ->
-            btn.setOnClickListener {
-                if (cfg.tapMode != mode) {
-                    cfg.tapMode = mode
-                    VoiceDiag.log(applicationContext, "配置变更", "识别方式=${TapMode.labelOf(mode)}")
-                    Toast.makeText(applicationContext,
-                        "识别方式已切换为「${TapMode.labelOf(mode)}」（下次启动识别时生效）",
-                        Toast.LENGTH_SHORT).show()
-                }
-                refreshModeButtons()
-            }
-        }
-
-        // ---- 2. 自动识别档下的点棋盘行为 ----
-        val btnAutoRefresh = findViewById<Button>(R.id.btn_auto_refresh)
-        btnAutoRefresh.text = TapMode.switchText(cfg.quickRefreshEnabled)
-        btnAutoRefresh.setOnClickListener {
-            val on = !cfg.quickRefreshEnabled
-            cfg.quickRefreshEnabled = on
-            VoiceDiag.log(applicationContext, "配置变更", "自动档点按刷新=$on")
-            btnAutoRefresh.text = TapMode.switchText(on)
-            Toast.makeText(applicationContext,
-                if (on) "自动识别档：点棋盘＝点按刷新" else "自动识别档：点棋盘＝点按变招",
-                Toast.LENGTH_SHORT).show()
-        }
+        // ---- 1. 怎么用（v1.9 开箱即用：行为固定，无可选项） ----
+        // 点棋盘 = 这一帧直接算 → 支招 → 语音播报，永久固定；不点棋盘完全不动。
+        // 旧档位配置（四选一互斥 / 自动识别）由 AssistConfig 读取时幂等归位，
+        // 这里连一个开关都不放，用户不用看懂任何设置，装上点一下就能用。
+        findViewById<TextView>(R.id.tv_usage_summary).text =
+            "点一下棋盘 → 立刻支招 ＋ 语音播报\n" +
+            "不点棋盘 → 完全不动\n" +
+            "不用设置，装好就能用"
 
         // ---- 3. 中文播报：总开关 ----
         val btnEnabled = findViewById<Button>(R.id.btn_voice_enabled)
@@ -204,14 +179,7 @@ class FeatureSwitchesActivity : AppCompatActivity() {
         }
     }
 
-    /** 四档互斥回填：当前档「开」、其余「关」，并刷新说明文字。 */
-    private fun refreshModeButtons() {
-        val cur = cfg.tapMode
-        modeButtons.forEach { (btn, mode) ->
-            btn.text = TapMode.switchText(cur == mode)
-        }
-        modeHint.text = TapMode.hintOf(cur)
-    }
+    // v1.9：档位交互函数整体删除 —— 行为固定后没有任何需要同步或回填的状态。
 
     private fun onReadMaskChanged() {
         val selected = readCheckBoxes.filter { it.first.isChecked }.map { it.second }.toSet()

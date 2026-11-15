@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  增强功能（v1.5 统一开关页）：本分支相对上游自研的功能全部集中在这一页，
-  每项都有独立开关；识别方式四档互斥，呈现为四个「开/关」按钮，开一个自动关其余。
-  旧页 voice_settings.xml（语音设置）与散落主页的分支开关一并收编到此页。
+  增强功能（v1.9 开箱即用）：识别行为永久固定，页面不再有任何档位开关。
+  第一屏「怎么用」大字写明：点一下棋盘 → 立刻支招 ＋ 语音播报；不点棋盘完全不动。
+  v1.5~v1.8 的四选一互斥 / 两维度档位全部废弃 —— 它们会把点棋盘劫持成「切候选」，
+  把识别推理支招播报整条链断掉，用户实测即「点一下没用」。下面其余开关默认已配好。
 -->
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
@@ -52,110 +53,42 @@
             android:layout_marginTop="6dp"
             android:maxLines="6"
             android:ellipsize="none"
-            android:text="本分支相对上游新增/定制的功能都在这里，每项都有独立开关。改完即时生效（部分项下次启动识别时生效）。"
+            android:text="识别不用设置，装好点一下棋盘就能用。下面这些是额外开关，默认都已配好，不用改。"
             tools:ignore="HardcodedText" />
 
-        <!-- ============ 1. 识别方式（四选一互斥） ============ -->
+        <!-- ============ v1.9：怎么用（开箱即用，识别行为固定，没有任何档位开关） ============ -->
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="22dp"
-            android:text="识别方式（四选一）"
+            android:text="怎么用"
             android:textColor="@color/xq_zhu"
             android:textSize="13sp"
             android:textStyle="bold"
             tools:ignore="HardcodedText" />
 
         <TextView
-            style="@style/StepHint"
+            android:id="@+id/tv_usage_summary"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:maxLines="4"
-            android:ellipsize="none"
-            android:text="同一时刻只生效一档：把想要的那一档点成「开」，其余自动变「关」。"
+            android:layout_marginTop="10dp"
+            android:background="@drawable/engine_chip_bg"
+            android:padding="16dp"
+            android:lineSpacingExtra="6dp"
+            android:text="点一下棋盘 → 立刻支招 ＋ 语音播报\n不点棋盘 → 完全不动\n不用设置，装好就能用"
+            android:textColor="@color/xq_ink_text"
+            android:textSize="17sp"
+            android:textStyle="bold"
             tools:ignore="HardcodedText" />
 
-        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
-            android:layout_marginTop="10dp" android:gravity="center_vertical" android:orientation="horizontal">
-            <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
-                android:text="点按出招（默认·省电）" android:textColor="@color/xq_ink_text" android:textSize="13sp"
-                tools:ignore="HardcodedText" />
-            <Button android:id="@+id/btn_mode_suggest" style="@style/ValueChip"
-                android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="开"
-                tools:ignore="HardcodedText" />
-        </LinearLayout>
-
-        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
-            android:layout_marginTop="8dp" android:gravity="center_vertical" android:orientation="horizontal">
-            <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
-                android:text="点按刷新" android:textColor="@color/xq_ink_text" android:textSize="13sp"
-                tools:ignore="HardcodedText" />
-            <Button android:id="@+id/btn_mode_refresh" style="@style/ValueChip"
-                android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="关"
-                tools:ignore="HardcodedText" />
-        </LinearLayout>
-
-        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
-            android:layout_marginTop="8dp" android:gravity="center_vertical" android:orientation="horizontal">
-            <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
-                android:text="点按变招" android:textColor="@color/xq_ink_text" android:textSize="13sp"
-                tools:ignore="HardcodedText" />
-            <Button android:id="@+id/btn_mode_candidate" style="@style/ValueChip"
-                android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="关"
-                tools:ignore="HardcodedText" />
-        </LinearLayout>
-
-        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
-            android:layout_marginTop="8dp" android:gravity="center_vertical" android:orientation="horizontal">
-            <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
-                android:text="自动识别（上游老行为）" android:textColor="@color/xq_ink_text" android:textSize="13sp"
-                tools:ignore="HardcodedText" />
-            <Button android:id="@+id/btn_mode_auto" style="@style/ValueChip"
-                android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="关"
-                tools:ignore="HardcodedText" />
-        </LinearLayout>
-
         <TextView
-            android:id="@+id/tv_mode_hint"
             style="@style/StepHint"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
-            android:maxLines="10"
-            android:ellipsize="none"
-            android:text="不点棋盘＝零识别、零推理、零支招、零朗读；点一次棋盘＝抓当前画面识别一轮 → 开局库/引擎支招 → 中文播报，确认后立刻收场。最省电，推荐。"
-            tools:ignore="HardcodedText" />
-
-        <!-- ============ 2. 自动识别档下的点棋盘行为 ============ -->
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="22dp"
-            android:text="自动识别时的点棋盘行为"
-            android:textColor="@color/xq_zhu"
-            android:textSize="13sp"
-            android:textStyle="bold"
-            tools:ignore="HardcodedText" />
-
-        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
-            android:layout_marginTop="10dp" android:gravity="center_vertical" android:orientation="horizontal">
-            <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
-                android:text="点按刷新（关＝点按变招）" android:textColor="@color/xq_ink_text" android:textSize="13sp"
-                tools:ignore="HardcodedText" />
-            <Button android:id="@+id/btn_auto_refresh" style="@style/ValueChip"
-                android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="开"
-                tools:ignore="HardcodedText" />
-        </LinearLayout>
-
-        <TextView
-            style="@style/StepHint"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
             android:maxLines="6"
             android:ellipsize="none"
-            android:text="仅当「自动识别」档开启时生效；前三档由上面的四选一直接决定，不读此项。"
+            android:text="识别不用选档位，点一下就出招、并念出纯中文着法；没认清棋盘会提示「再点一次」。下面这些默认都已配好，不用改。"
             tools:ignore="HardcodedText" />
 
         <!-- ============ 3. 中文播报 ============ -->
