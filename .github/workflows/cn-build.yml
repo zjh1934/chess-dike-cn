@@ -76,7 +76,18 @@ jobs:
           fi
 
       - name: Unit tests
-        run: bash gradlew :app:testArmv8-dotprodDebugUnitTest --no-daemon --console=plain
+        # 失败时把关键错误行回传成 check-run annotations：无需下载被网络策略拦截的
+        # 日志 blob，从 GitHub API 就能读到编译/断言失败原因（排障用，长期保留）
+        run: |
+          set -o pipefail
+          if ! bash gradlew :app:testArmv8-dotprodDebugUnitTest --no-daemon --console=plain 2>&1 | tee /tmp/unit.log; then
+            echo "::group::单测失败摘要"
+            grep -E '^e: |FAILED|FAILURE:|What went wrong|Unresolved reference|Type mismatch|error:|Execution failed|Caused by:|AssertionError|expected:|but was:|> Task .* FAILED' /tmp/unit.log | head -60 | while IFS= read -r line; do
+              echo "::error::$line"
+            done
+            echo "::endgroup::"
+            exit 1
+          fi
 
       - name: Assemble Release APKs
         run: bash gradlew assembleArmv8Release assembleArmv8-dotprodRelease --no-daemon --console=plain
