@@ -16,10 +16,11 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 
 /**
- * 快捷刷新（v1.3）真实点击链路的运行时证据：直接把 ACTION_DOWN/ACTION_UP 派发给
- * OverlayPanelView 里的迷你棋盘，验证 chess.onNextCandidate → panel.onAction 的分发结果。
- * 关闭→CYCLE_CANDIDATE、开启→FLIP_TURN（与右列「更新」按钮完全相同）、
- * 手动摆棋→不抢点格。这是「链路接通」而非「只放开关」的回归保证。
+ * 点棋盘真实点击链路的运行时证据：把 ACTION_DOWN/ACTION_UP 派发给 OverlayPanelView
+ * 里的迷你棋盘，验证 chess.onNextCandidate → panel.onAction 的分发结果。
+ *
+ * v1.4：开启「点按识别」→ TAP_RECOGNIZE（启动一轮识别→推理→支招）；关闭该开关时
+ * 退回 v1.3 的 CYCLE_CANDIDATE / FLIP_TURN；手动摆棋模式不抢点格。
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], qualifiers = "w440dp-h920dp-440dpi")
@@ -53,34 +54,47 @@ class QuickRefreshLinkTest {
     }
 
     @Test
-    fun `关闭时点迷你棋盘只派发 CYCLE_CANDIDATE`() {
+    fun `默认开启点按识别时点棋盘派发 TAP_RECOGNIZE`() {
         val (panel, chess) = newPanel()
         val actions = mutableListOf<OverlayAction>()
         panel.onAction = { actions += it }
+        // 默认即开（TapTrigger.DEFAULT_ENABLED），显式写出便于回归时一眼看懂
+        panel.tapTriggerEnabled = true
+        tapChess(chess)
+        assertEquals(listOf(OverlayAction.TAP_RECOGNIZE), actions)
+    }
+
+    @Test
+    fun `关闭点按识别且快捷刷新关闭时点棋盘只派发 CYCLE_CANDIDATE`() {
+        val (panel, chess) = newPanel()
+        val actions = mutableListOf<OverlayAction>()
+        panel.onAction = { actions += it }
+        panel.tapTriggerEnabled = false
         panel.quickRefreshEnabled = false
         tapChess(chess)
         assertEquals(listOf(OverlayAction.CYCLE_CANDIDATE), actions)
     }
 
     @Test
-    fun `开启时点迷你棋盘派发 FLIP_TURN-链路接通的运行时证据`() {
+    fun `关闭点按识别但快捷刷新开启时仍可派发 FLIP_TURN`() {
         val (panel, chess) = newPanel()
         val actions = mutableListOf<OverlayAction>()
         panel.onAction = { actions += it }
+        panel.tapTriggerEnabled = false
         panel.quickRefreshEnabled = true
         tapChess(chess)
         assertEquals(listOf(OverlayAction.FLIP_TURN), actions)
     }
 
     @Test
-    fun `手动摆棋模式下点棋盘不被快捷刷新抢走`() {
+    fun `手动摆棋模式下点棋盘不触发任何动作`() {
         val (panel, chess) = newPanel()
         val actions = mutableListOf<OverlayAction>()
         panel.onAction = { actions += it }
         // 服务端以 manualMode=true 渲染后，chess.onTouchEvent 走 hitCell/onCellTap，
         // 根本不会回调 onNextCandidate，因此不产生任何 onAction 动作
         panel.render(OverlayModel(manualMode = true))
-        panel.quickRefreshEnabled = true
+        panel.tapTriggerEnabled = true
         tapChess(chess)
         assertTrue("手动摆棋点格不应触发任何 onAction 动作", actions.isEmpty())
     }

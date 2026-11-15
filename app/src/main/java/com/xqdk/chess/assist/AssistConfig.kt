@@ -146,6 +146,16 @@ class AssistConfig(context: Context) {
         get() = sp.getBoolean(KEY_QUICK_REFRESH_ENABLED, QuickRefresh.DEFAULT_ENABLED)
         set(value) { sp.edit().putBoolean(KEY_QUICK_REFRESH_ENABLED, value).apply() }
 
+    /**
+     * 点按触发识别（v1.4，默认开）：开启后只有点悬浮窗迷你棋盘才启动一轮
+     * 识别→推理→支招（不点棋盘 = 零识别、零推理、零支招、零朗读）；关闭时
+     * 点棋盘退回 v1.3 的快捷刷新/切换候选行为，但**依然不会自动连续识别**。
+     * 服务每次 render 现读，设置页热改即时生效。
+     */
+    var tapTriggerEnabled: Boolean
+        get() = sp.getBoolean(KEY_TAP_TRIGGER_ENABLED, TapTrigger.DEFAULT_ENABLED)
+        set(value) { sp.edit().putBoolean(KEY_TAP_TRIGGER_ENABLED, value).apply() }
+
     companion object {
         private const val KEY_RECOGNIZER_ENGINE = "recognizer_engine"
         private const val KEY_FRAME_W = "frame_w"
@@ -167,5 +177,6 @@ class AssistConfig(context: Context) {
         private const val KEY_VOICE_DIAG_ENABLED = "voice_diag_enabled"
         private const val KEY_VOICE_READ_MASK = "voice_read_mask"
         private const val KEY_QUICK_REFRESH_ENABLED = "quick_refresh_enabled"
+        private const val KEY_TAP_TRIGGER_ENABLED = "tap_trigger_enabled"
     }
 }

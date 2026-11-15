@@ -290,18 +290,18 @@
                 tools:ignore="HardcodedText" />
         </LinearLayout>
 
-        <!-- 悬浮窗快捷操作（v1.3）：与语音无关，按用户要求放在本设置页 -->
+        <!-- 悬浮窗快捷操作（v1.4 点按识别）：与语音无关，按用户要求放在本设置页 -->
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="22dp"
-            android:text="悬浮窗快捷操作"
+            android:text="悬浮窗点按操作"
             android:textColor="@color/xq_zhu"
             android:textSize="13sp"
             android:textStyle="bold"
             tools:ignore="HardcodedText" />
 
-        <!-- 8. 快捷刷新开关（默认开，文字与默认值一致） -->
+        <!-- 8. 点按识别开关（默认开，文字与默认值一致） -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -313,7 +313,7 @@
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:text="快捷刷新"
+                android:text="点按识别"
                 android:textColor="@color/xq_ink_text"
                 android:textSize="13sp"
                 tools:ignore="HardcodedText" />
@@ -336,7 +336,7 @@
             android:layout_marginTop="4dp"
             android:maxLines="10"
             android:ellipsize="none"
-            android:text="开启后，点悬浮窗中间的棋盘就相当于点右列的「更新」键：立即重新计算这一步该走什么（悬浮窗提示「棋局已更新」）。关闭时点棋盘是切换候选着法；手动摆棋时点棋盘仍然是摆子，不受影响。"
+            android:text="开启后，只有点悬浮窗中间的棋盘才启动一轮识别→推理→支招（含语音播报）；不点棋盘时完全不识别、不推理、不出招、不朗读。关闭时点棋盘退回切换候选着法/快捷刷新，但依然不会自动连续识别。手动摆棋时点棋盘仍然是摆子，不受影响。"
             tools:ignore="HardcodedText" />
 
     </LinearLayout>

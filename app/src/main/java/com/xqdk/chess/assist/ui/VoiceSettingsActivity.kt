@@ -12,7 +12,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import com.xqdk.chess.R
 import com.xqdk.chess.assist.AssistConfig
-import com.xqdk.chess.assist.QuickRefresh
+import com.xqdk.chess.assist.TapTrigger
 import com.xqdk.chess.assist.VoiceDiag
 import com.xqdk.chess.assist.VoicePrompt
 import com.xqdk.chess.assist.VoiceSpeaker
@@ -171,18 +171,19 @@ class VoiceSettingsActivity : AppCompatActivity() {
             Toast.makeText(applicationContext, "诊断日志已清空", Toast.LENGTH_SHORT).show()
         }
 
-        // 8. 快捷刷新（v1.3）：与语音无关，但按用户要求放在本设置页；写同一份
-        //    assist_settings，服务每次 render 现读，热改即时生效。
-        val btnQuickRefresh = findViewById<Button>(R.id.btn_quick_refresh)
-        btnQuickRefresh.text = QuickRefresh.switchText(cfg.quickRefreshEnabled)
-        btnQuickRefresh.setOnClickListener {
-            val on = !cfg.quickRefreshEnabled
-            cfg.quickRefreshEnabled = on
-            btnQuickRefresh.text = QuickRefresh.switchText(on)
+        // 8. 点按触发识别（v1.4，默认开）：与语音无关，但按用户要求放在本设置页；
+        //    写同一份 assist_settings，服务每次 render 现读，热改即时生效。
+        //    这里只决定"点棋盘是否启动一轮识别"，**没有恢复自动连续识别的开关**。
+        val btnTapTrigger = findViewById<Button>(R.id.btn_quick_refresh)
+        btnTapTrigger.text = TapTrigger.switchText(cfg.tapTriggerEnabled)
+        btnTapTrigger.setOnClickListener {
+            val on = !cfg.tapTriggerEnabled
+            cfg.tapTriggerEnabled = on
+            btnTapTrigger.text = TapTrigger.switchText(on)
             Toast.makeText(
                 applicationContext,
-                if (on) "快捷刷新已开启：点悬浮窗棋盘即可刷新棋局"
-                else "快捷刷新已关闭：点棋盘仍切换候选着法",
+                if (on) "点按识别已开启：点悬浮窗棋盘才识别并支招"
+                else "点按识别已关闭：点棋盘改为切换候选/快捷刷新（仍不自动识别）",
                 Toast.LENGTH_SHORT,
             ).show()
         }

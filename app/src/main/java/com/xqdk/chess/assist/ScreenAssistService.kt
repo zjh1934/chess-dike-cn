@@ -87,6 +87,8 @@ class ScreenAssistService : Service() {
         /** 帧循环兜底 tick 周期（Cabinet 同款）：画面静止后合成器不再产帧、回调停摆，
          *  确认链（多帧一致）靠它重放 lastFrame 推进，否则走子后永远"正在识别棋盘…" */
         private const val FRAME_TICK_MS = 700L
+        /** v1.4 点按识别会话硬上限：超时自动收场，避免一次点按后帧循环永久占用 */
+        private const val TAP_SESSION_TIMEOUT_MS = 10_000L
         /** 停稳门槛：画面刚运动过（走子动画/切页过渡）时等该时长静默再识别——
          *  过渡帧推理出来的是错误局面，白烧一轮还污染确认链（Cabinet 同款） */
         private const val MOTION_SETTLE_MS = 200L
@@ -180,7 +182,7 @@ class ScreenAssistService : Service() {
      * 安全性（全依赖 worker 线程串行，onImageAvailable/handleFrame/frameTick 都在
      * workerHandler 上执行）：覆盖只可能发生在 handleFrame 尚未开始或已经结束后
      * ——不存在边识别边写的撕裂。极端时序下（识别慢于帧率）在队列中的 handleFrame
-     * 所引用的块可能被 takeFrameForDiff 重写为更新的画面，识别帧因此比触发帧"新"
+     * 所引用的块可能被 consumeIdleFrame / 新帧重写为更新的画面，识别帧因此比触发帧"新"
      * ——识别目标本就是当前屏幕，方向正确，多帧确认链不受影响。
      * 【雷区】若未来把帧处理移出 worker 线程或允许多帧并发识别，本池必须同步加锁。
      */
@@ -202,6 +204,15 @@ class ScreenAssistService : Service() {
      * 帧差判真变化置位；识别成功消费（tracker 有结论）后清位。
      * frameTick 只在"有未消费变化"或"确认链未完成"时重放，稳态零冗余推理。
      */
+    /**
+     * v1.4 点按触发识别会话：只有点悬浮窗棋盘才置 true。
+     * false 时帧回调只保留画面、frameTick 不重放、handleFrame 直接早退——
+     * 即"不点棋盘 = 零识别、零推理、零支招、零朗读"。
+     * 跨线程（UI 点击 post 到 worker / worker 帧循环）故 @Volatile。
+     */
+    @Volatile private var tapSessionActive = false
+    @Volatile private var tapSessionDeadline = 0L
+
     @Volatile private var screenChangedSinceRec = true
     /** 帧差签名槽（上帧采样点像素值）：与上帧逐点比较即更新，零分配复用 */
     private var frameSig: IntArray? = null
@@ -445,6 +456,9 @@ class ScreenAssistService : Service() {
         // 录屏被系统侧停止再重连这条重启路径原实现会漏，旧局面的预判线不带入新会话
         ponderCache.clear()
         lastPreFen = null
+        // v1.4 新会话从"未点棋盘"的静止态开始：等用户点棋盘才识别
+        tapSessionActive = false
+        tapSessionDeadline = 0L
         // 新会话识别立即放行：清退避/burst/成本历史（旧会话的失败退避不带入）
         onnxPacer.reset()
         yoloPacer.reset()
@@ -519,33 +533,31 @@ class ScreenAssistService : Service() {
         // 遮挡黄字重算（每真实帧，沿变化才重绘）：FLAG_SECURE 后遮挡不影响识别，
         // 黄字纯属引导用户把面板移开棋盘
         recomputeOcclusion()
-        // FLAG_SECURE（任务书根因 3 根治）：悬浮窗已从录屏合成中整体剔除——画面里
-        // 永远没有自家面板，抓帧全程无需"隐藏-恢复"动作，原 alpha=0 → sleep(60) →
-        // 抓帧 → alpha=1 机制整体删除（那是悬浮窗每 1.4s 消失重现闪烁的本体，
-        // 也曾阻塞 assist-worker 线程并存在隐藏/抓帧无栅栏的识别污染）。
-        // 慢路径保留降频语义（遮挡条件删除——FLAG_SECURE 后遮挡与识别无关）：
-        // 棋盘未定位/识别不稳定时全图定位推理很重，低频采样
-        val trackingUnstable = tracker.unstableStreak > 0
-        val slowPath = sessionGrid == null || trackingUnstable
-        val interval = if (slowPath) OVERLAY_FRAME_INTERVAL_MS else MIN_FRAME_INTERVAL_MS
-        if (now - lastFrameTs < interval) {
-            // 必须取走帧，否则 ImageReader 缓冲池占满后不再派发回调；
-            // 取走后做轻量帧差（稀疏采样毫秒级）：真变化才标记（screenChangedSinceRec）
-            takeFrameForDiff(reader, now)
-            return
-        }
-        lastFrameTs = now
         try {
-            // 上一帧还在识别队列时本帧注定被覆盖：转帧差采样（真变化不丢标志）
-            if (pendingFrame) {
-                takeFrameForDiff(reader, now)
-                return
-            }
+            // 帧必须取走并关闭，否则 ImageReader 缓冲池占满后不再派发回调。
+            // v1.4 点按触发识别：未点棋盘时只保留"最近一帧画面"（供点击瞬间立即使用），
+            // 绝不进识别管线、不调 pacer、不推理、不支招、不朗读。
             val image = reader.acquireLatestImage() ?: return
             try {
-                // 快速路径第一道帧差：全帧稀疏采样，窗口外背景静止即整帧丢弃
-                // （省下整屏解码与 YOLO 推理）。慢路径（未定位/确认期）不短路——
-                // 定位与多帧确认每帧都要推理
+                if (!tapSessionActive) {
+                    consumeIdleFrame(image, markChange = false)
+                    return
+                }
+                // ---- 以下仅在本轮点按识别会话内执行 ----
+                // 棋盘未定位/确认链未稳时全图定位推理很重，低频采样；其余帧仍走帧差节流
+                val trackingUnstable = tracker.unstableStreak > 0
+                val slowPath = sessionGrid == null || trackingUnstable
+                val interval = if (slowPath) OVERLAY_FRAME_INTERVAL_MS else MIN_FRAME_INTERVAL_MS
+                if (now - lastFrameTs < interval) {
+                    consumeIdleFrame(image, markChange = true)
+                    return
+                }
+                lastFrameTs = now
+                // 上一帧还在识别队列时本帧注定被覆盖：转帧差采样（真变化不丢标志）
+                if (pendingFrame) {
+                    consumeIdleFrame(image, markChange = true)
+                    return
+                }
                 val ratio = frameChangeRatio(image)
                 if (ratio >= CHANGE_RATIO_MIN) {
                     lastMotionTs = now
@@ -557,7 +569,10 @@ class ScreenAssistService : Service() {
                         diagLog?.appendEvent("切页", "清退避（画面变化 ${(ratio * 100).toInt()}%）")
                     }
                 }
-                if (ratio < CHANGE_RATIO_MIN && !slowPath) return
+                if (ratio < CHANGE_RATIO_MIN && !slowPath) {
+                    consumeIdleFrame(image, markChange = false)
+                    return
+                }
                 val frame = imageToFrame(image)
                 lastFrame = frame
                 pendingFrame = true
@@ -570,54 +585,51 @@ class ScreenAssistService : Service() {
         }
     }
 
-    /** 节流/丢弃路径的帧处理：取走并关闭帧，做稀疏采样帧差；真变化才置位标志并保存像素 */
-    private fun takeFrameForDiff(reader: ImageReader, now: Long) {
-        try {
-            reader.acquireLatestImage()?.use { img ->
-                val ratio = frameChangeRatio(img)
-                if (ratio >= CHANGE_RATIO_MIN) {
-                    lastMotionTs = now
-                    screenChangedSinceRec = true
-                    recognizePacer().requestBurst()
-                    if (ratio >= CHANGE_RATIO_PAGE) {
-                        recognizePacer().clearBackoff()
-                        diagLog?.appendEvent("切页", "清退避（画面变化 ${(ratio * 100).toInt()}%）")
-                    }
-                    // 变化帧像素即刻保存（Cabinet kept 机制）：录屏帧"取走即焚"，
-                    // 不保存则兜底重放拿到的永远是更旧的画面（走子后冻结的根源）
-                    lastFrame = imageToFrame(img)
-                }
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "frame diff failed", e)
+    /**
+     * 非识别帧的统一收口（v1.4）：只"保留最近画面"，不做任何推理。
+     * 静止画面合成器不再产帧时，lastFrame 即点击前最后一帧，点击瞬间可直接
+     * 重放它推进确认链，不必等下一帧回调（静止时可能永远等不到）。
+     * 稀疏帧差只用于决定要不要刷新这份像素，不会触发 pacer/识别/支招。
+     */
+    private fun consumeIdleFrame(image: Image, markChange: Boolean) {
+        val ratio = try { frameChangeRatio(image) } catch (e: Exception) { 0f }
+        if (markChange && ratio >= CHANGE_RATIO_MIN) {
+            lastMotionTs = System.currentTimeMillis()
+            screenChangedSinceRec = true
+        }
+        if (lastFrame == null || ratio >= CHANGE_RATIO_MIN) {
+            lastFrame = imageToFrame(image)
         }
     }
 
     /**
-     * 帧循环兜底 tick（Cabinet FRAME_TICK_MS 同款）：画面静止后合成器不再产帧、
-     * ImageReader 回调停摆，多帧确认链会饿死（走子后永远"正在识别棋盘…"）。
-     * 仅在"有未消费的画面变化"或"确认链未完成"时重放 lastFrame 推进；
-     * 稳态（已确认且无变化）零冗余推理。
+     * 帧循环兜底 tick：v1.4 起只在点按识别会话内重放 lastFrame 推进多帧确认链；
+     * 会话外（未点棋盘）只按固定周期空转续期，零重放、零识别、零推理。
      */
     private val frameTick = object : Runnable {
         override fun run() {
             // 录屏已释放：不再续期（releaseCapture 的 removeCallbacks 与在途 tick 并发时会重新入队空转）
             if (mediaProjection == null) return
-            if (!paused && !manualMode) {
-                val unstable = tracker.unstableStreak > 0
-                // 重放也过识别节拍器：退避期重放是白做一轮完整处理（闸口反正拦下）
-                if ((screenChangedSinceRec || unstable) && !pendingFrame &&
-                    recognizePacer().canRecognizeNow()) {
-                    val f = lastFrame
-                    if (f != null) {
-                        pendingFrame = true
-                        workerHandler.post { pendingFrame = false; handleFrame(f) }
+            if (tapSessionActive) {
+                if (System.currentTimeMillis() > tapSessionDeadline) {
+                    // 一次点按迟迟确认不了（棋盘被遮挡/识别失败）：收场并提示再点一次，
+                    // 不让帧循环无限期烧 CPU
+                    endTapSession(success = false)
+                } else if (!paused && !manualMode) {
+                    val unstable = tracker.unstableStreak > 0
+                    // 重放也过识别节拍器：退避期重放是白做一轮完整处理（闸口反正拦下）
+                    if ((screenChangedSinceRec || unstable) && !pendingFrame &&
+                        recognizePacer().canRecognizeNow()) {
+                        val f = lastFrame
+                        if (f != null) {
+                            pendingFrame = true
+                            workerHandler.post { pendingFrame = false; handleFrame(f) }
+                        }
                     }
                 }
             }
-            // burst 快速确认期用 150ms 细粒度：间隔下限 300ms 时 tick 相位损失减半，
-            // 走子→确认链每一环都省一截；稳态仍 700ms（闸口反正会拦，粒度只影响响应延迟）
-            workerHandler.postDelayed(this, if (recognizePacer().isBursting()) 150L else FRAME_TICK_MS)
+            workerHandler.postDelayed(this,
+                if (tapSessionActive && recognizePacer().isBursting()) 150L else FRAME_TICK_MS)
         }
     }
 
@@ -767,6 +779,9 @@ class ScreenAssistService : Service() {
             if (want != engineName) switchEngine(want)
         }
         if (paused || manualMode) return
+        // v1.4：只有点棋盘开启的识别会话内才允许帧进入识别/推理管线；
+        // 会话结束（确认完成或超时）后在途帧一律丢弃，绝不自行再识别一轮。
+        if (!tapSessionActive) return
         // 停稳门槛：画面刚运动过（走子动画/切页过渡）时先等 MOTION_SETTLE_MS 静默
         // 再识别——过渡帧推理出来的是错误局面，白烧一轮还污染确认；常驻闪烁源
         // 导致永远等不到停稳时按 MOTION_SETTLE_MAX_MS 兜底放行（Cabinet 同款）
@@ -1103,6 +1118,8 @@ class ScreenAssistService : Service() {
         diagLog?.appendEvent("棋盘确认", currentFen)
         postRender()
         scheduleAnalysis()
+        // v1.4：本轮点按识别已完成，立即收场回到"不点不动"的静止态
+        endTapSession(success = true)
     }
 
     private fun flatten(p: Array<IntArray>): IntArray {
@@ -1234,8 +1251,14 @@ class ScreenAssistService : Service() {
         override fun onEngineReady() {
             engineReady = true
             engineErrorText = null
-            setStatus("识别中")
-            scheduleAnalysis()
+            // v1.4：引擎预热完成不再无条件调度分析（旧版会用残留局面偷偷支招）。
+            // 唯一例外：本轮点棋盘已确认局面、引擎恰好才预热完，补齐那一次支招；
+            // 从未点过（currentFen 为空）时绝不启动任何推理。
+            if (currentFen.isNotEmpty() && tracker.confirmed != null) {
+                scheduleAnalysis()
+            } else {
+                setStatus("待点棋盘")
+            }
         }
 
         override fun onSearchUpdate(result: AnalysisResult) {
@@ -1385,6 +1408,7 @@ class ScreenAssistService : Service() {
         panel.applyTheme(OverlayTheme.fromKey(config.overlayTheme))
         // 快捷刷新（v1.3）：建窗首帧前回填一次，保证首帧点棋盘行为就与设置一致
         panel.quickRefreshEnabled = config.quickRefreshEnabled
+        panel.tapTriggerEnabled = config.tapTriggerEnabled
         panel.setDragHandle(params, wm) {
             // hasOverlayPos 哨兵位：归一化值允许为负（贴边上探挂进状态栏区域），
             // "保存过没有"不能再靠负值判断（2026-11-02 扫描 P1-1）
@@ -1448,6 +1472,7 @@ class ScreenAssistService : Service() {
 
     private fun onOverlayAction(action: OverlayAction) {
         when (action) {
+            OverlayAction.TAP_RECOGNIZE -> startTapRecognition()
             OverlayAction.PAUSE -> {
                 paused = !paused
                 setStatus(if (paused) "已停止指导\n点『继续』恢复" else "继续指导")
@@ -1500,6 +1525,59 @@ class ScreenAssistService : Service() {
                 else "闪电出着：当前没有思考中的搜索")
             }
         }
+    }
+
+    /**
+     * v1.4 点棋盘 = 启动一轮识别会话（worker 线程，与帧循环串行）。
+     *
+     * 一次点按只做一轮：抓当前画面 → 识别 → 多帧确认 → 重建 FEN → 查库/引擎支招 →
+     * 语音播报；确认或超时后 [endTapSession] 立刻收场，回到"不点不动"的静止态。
+     * 会话期间允许 frameTick 重放 lastFrame 推进确认链（画面静止不产帧时也能确认）。
+     */
+    private fun startTapRecognition() {
+        if (mediaProjection == null) {
+            setStatus("录屏未启动\n请回连线页重新开始屏幕识别")
+            return
+        }
+        if (paused || manualMode) {
+            setStatus("已暂停或手动摆棋中\n点『继续』/退出手动后再点棋盘")
+            return
+        }
+        tapSessionActive = true
+        tapSessionDeadline = System.currentTimeMillis() + TAP_SESSION_TIMEOUT_MS
+        // 重开一轮确认链（保留当前轮次），保证本轮必然产出一次 NEW_BOARD → 重新支招；
+        // 不 reset 的话 SAME_BOARD 会吞掉这次点按，用户看不到任何反应。
+        tracker.reset(tracker.redGo)
+        resetSuggestionState()
+        recMissStreak = 0
+        invalidStreak = 0
+        cropUnstableStreak = 0
+        sessionGrid = null
+        // 点击即放行：清掉上次识别的成本/退避历史，不让 pacer 把首帧挡在门外
+        onnxPacer.reset()
+        yoloPacer.reset()
+        lastFrameTs = 0L
+        lastMotionTs = 0L
+        motionWaitStart = 0L
+        screenChangedSinceRec = true
+        pendingFrame = false
+        setStatus("正在识别本轮棋局…\n请保持棋盘完整无遮挡")
+        // 立刻用最近画面推进第一帧，不等下一次合成器回调（静止时可能永远等不到）
+        lastFrame?.let { f ->
+            pendingFrame = true
+            workerHandler.post { pendingFrame = false; handleFrame(f) }
+        }
+    }
+
+    /** 一轮点按识别收场：清会话标志，帧循环随即回到零推理静止态。 */
+    private fun endTapSession(success: Boolean) {
+        if (!tapSessionActive) return
+        tapSessionActive = false
+        tapSessionDeadline = 0L
+        if (!success) {
+            setStatus("本轮未确认棋局\n请让棋盘完整无遮挡，再点一次棋盘")
+        }
+        postRender()
     }
 
     /**
@@ -1801,8 +1879,9 @@ class ScreenAssistService : Service() {
         val (stateText, stateKind) = when {
             manualMode -> "手动模式" to OverlayStateKind.MANUAL
             paused -> "已停止" to OverlayStateKind.IDLE
+            tapSessionActive -> "识别中" to OverlayStateKind.RUNNING
             engineErrorText != null -> "引擎异常" to OverlayStateKind.ERROR
-            engineReady -> "识别中" to OverlayStateKind.RUNNING
+            engineReady -> "待点棋盘" to OverlayStateKind.WAITING
             else -> "引擎预热中" to OverlayStateKind.WAITING
         }
 
@@ -1810,7 +1889,7 @@ class ScreenAssistService : Service() {
         val override = statusOverride ?: statusOverrideText
         val headline = when {
             override != null -> override
-            fen.isEmpty() -> "识别中"
+            fen.isEmpty() -> if (tapSessionActive) "识别中" else "点棋盘开始识别"
             paused -> "已停止指导"
             myTurn -> "轮到我方走"
             else -> "轮到对方走"
@@ -1924,6 +2003,7 @@ class ScreenAssistService : Service() {
 
         // 快捷刷新（v1.3）：每次渲染现读配置：语音设置页热改开关即时生效，无需重启录屏会话
         panel.quickRefreshEnabled = config.quickRefreshEnabled
+        panel.tapTriggerEnabled = config.tapTriggerEnabled
         panel.render(OverlayModel(
             stateText = stateText,
             stateKind = stateKind,
@@ -2026,6 +2106,8 @@ class ScreenAssistService : Service() {
     }
 
     private fun releaseCapture() {
+        tapSessionActive = false
+        tapSessionDeadline = 0L
         workerHandler.removeCallbacks(frameTick)
         try { virtualDisplay?.release() } catch (e: Exception) { }
         virtualDisplay = null

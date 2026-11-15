@@ -57,7 +57,12 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.xqdk.chess"
+        // v1.4 包名固定（用户拍板）：所有版本一律 com.xqdk.chess，与 v1.3 / 上游官方
+        // 保持同一应用身份。配合 CI 的 applicationId 门禁（voice-build.yml 里 aapt 校验），
+        // 任何改动该值都会让构建失败。签名同样固定（DEBUG_KEYSTORE_B64），因此
+        // v1.3 → v1.4 及以后各版本之间可直接覆盖安装，无需卸载。
+        val FIXED_APPLICATION_ID = "com.xqdk.chess"
+        applicationId = FIXED_APPLICATION_ID
         minSdk = 26
         targetSdk = 33
         // versionCode 地板 43（2026-10-29 稳定版压平拍板）：公开仓压成「已有 23 笔 +

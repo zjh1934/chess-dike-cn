@@ -15,6 +15,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import com.xqdk.chess.R
 import com.xqdk.chess.assist.QuickRefresh
+import com.xqdk.chess.assist.TapTrigger
 import kotlin.math.abs
 import kotlin.math.max
 
@@ -101,6 +102,8 @@ enum class OverlayAction {
     CYCLE_TIME,
     /** 闪电出着：打断当前搜索，立即采纳当前最优（引擎空闲时 no-op） */
     FLASH_STOP,
+    /** v1.4 点棋盘：启动一轮识别→推理→支招（不点棋盘时全流程静止） */
+    TAP_RECOGNIZE,
 }
 
 class OverlayPanelView @JvmOverloads constructor(
@@ -167,6 +170,12 @@ class OverlayPanelView @JvmOverloads constructor(
      * FLIP_TURN 动作；由 ScreenAssistService 每次 render 现读配置回填（热改即时生效）。
      */
     var quickRefreshEnabled: Boolean = QuickRefresh.DEFAULT_ENABLED
+    /**
+     * 点按触发识别（v1.4，默认开）：开启后点迷你棋盘派发 TAP_RECOGNIZE，
+     * 服务进入一轮识别会话；关闭时退回 v1.3 的快捷刷新/切换候选行为，
+     * 但依然不会自动连续识别。由 ScreenAssistService 每次 render 现读配置回填。
+     */
+    var tapTriggerEnabled: Boolean = TapTrigger.DEFAULT_ENABLED
     /** 手动模式：小棋盘点格（canonical x,y），由服务端处理选子/走子/删子 */
     var onCellTap: ((x: Int, y: Int) -> Unit)? = null
     /** 拖动开始/结束（遮挡黄字拖动豁免等） */
@@ -243,14 +252,18 @@ class OverlayPanelView @JvmOverloads constructor(
             }
         }
         chess.onNextCandidate = {
-            // 快捷刷新（v1.3）：开关开启时，点棋盘走与右列「更新」按钮完全相同的
-            // onAction(FLIP_TURN) 链路（由服务 post 到 worker 后执行 onOverlayAction）；
-            // 关闭时保持上游「切换候选着法」。manualMode 的点格在 OverlayChessView
-            // 内部已截胡，不会走到这里（MANUAL_CELL 为防御分支，不触发任何动作）。
-            when (QuickRefresh.resolve(quickRefreshEnabled, chess.manualMode)) {
-                QuickRefresh.TapAction.REFRESH -> onAction?.invoke(OverlayAction.FLIP_TURN)
-                QuickRefresh.TapAction.NEXT_CANDIDATE -> onAction?.invoke(OverlayAction.CYCLE_CANDIDATE)
-                QuickRefresh.TapAction.MANUAL_CELL -> Unit
+            // 点按触发识别（v1.4）：默认点棋盘 = 启动一轮识别→推理→支招；
+            // 关闭该开关时退回 v1.3 的快捷刷新/切换候选（仍不会自动连续识别）。
+            // manualMode 的点格在 OverlayChessView 内部已截胡，不会走到这里。
+            when (TapTrigger.resolve(tapTriggerEnabled, chess.manualMode)) {
+                TapTrigger.Action.RECOGNIZE -> onAction?.invoke(OverlayAction.TAP_RECOGNIZE)
+                TapTrigger.Action.LEGACY ->
+                    when (QuickRefresh.resolve(quickRefreshEnabled, chess.manualMode)) {
+                        QuickRefresh.TapAction.REFRESH -> onAction?.invoke(OverlayAction.FLIP_TURN)
+                        QuickRefresh.TapAction.NEXT_CANDIDATE -> onAction?.invoke(OverlayAction.CYCLE_CANDIDATE)
+                        QuickRefresh.TapAction.MANUAL_CELL -> Unit
+                    }
+                TapTrigger.Action.NONE -> Unit
             }
         }
         chess.onCellTap = { x, y -> onCellTap?.invoke(x, y) }

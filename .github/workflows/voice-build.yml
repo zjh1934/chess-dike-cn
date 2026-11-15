@@ -29,7 +29,7 @@ on:
         description: 'Release 标签名（不以 v 开头，避免触发官方 Build-XQDK 流水线）'
         type: string
         required: false
-        default: 'voice-1.3'
+        default: 'voice-1.4'
 
 permissions:
   contents: write
@@ -89,6 +89,23 @@ jobs:
 
       # 打印每个 APK 的签名证书 SHA-256 指纹：与固定钥匙指纹一致即证明"签名固定"生效，
       # 用户核对两版指纹相同即可放心覆盖安装
+      # v1.4 包名固定门禁：任何改动 applicationId 的提交都不得出包
+      # （包名一变就是另一个 App，v1.3 起固定的签名也没法覆盖升级）
+      - name: Verify fixed applicationId
+        run: |
+          set -euo pipefail
+          BT="$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -1)"
+          AAPT="$BT/aapt"
+          [ -x "$AAPT" ] || { echo "::error::未找到 aapt，无法校验包名"; exit 1; }
+          for f in dist/*.apk; do
+            ID="$("$AAPT" dump badging "$f" | head -1 | sed -E "s/^package: name='([^']+)'.*/\1/")"
+            echo "$f -> applicationId=$ID"
+            if [ "$ID" != "com.xqdk.chess" ]; then
+              echo "::error::包名被改动（$ID），必须固定为 com.xqdk.chess"
+              exit 1
+            fi
+          done
+
       - name: Print APK signing fingerprints
         run: |
           BT="$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -1)"
@@ -111,10 +128,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ inputs.release_tag }}
-          RELEASE_TITLE: '象棋迪克 XQDK · 支招语音提示版 v1.3'
+          RELEASE_TITLE: '象棋迪克 XQDK · 支招语音提示版 v1.4'
         run: |
           set -euo pipefail
-          TAG="${RELEASE_TAG:-voice-1.3}"
+          TAG="${RELEASE_TAG:-voice-1.4}"
           echo "发布标签: $TAG"
           echo "产物清单:"
           ls -lh dist/
