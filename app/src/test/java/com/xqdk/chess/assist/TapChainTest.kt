@@ -600,7 +600,7 @@ class TapChainTest {
             return ""
         }
         val cfg = readSrc("app/src/main/java/com/xqdk/chess/assist/AssistConfig.kt")
-        assertTrue("配置读取必须幂等归位 yolo", cfg.contains('get() = "yolo"'))
+        assertTrue("配置读取必须幂等归位 yolo", cfg.contains("get() = \"yolo\""))
         val svc = readSrc("app/src/main/java/com/xqdk/chess/assist/ScreenAssistService.kt")
         assertTrue("面板芯片不再切引擎", svc.contains("面板芯片点击：保持 YOLO") &&
             svc.contains("识别引擎：YOLO（本版固定）"))
@@ -610,7 +610,7 @@ class TapChainTest {
         assertTrue("连线页单选不再注册切换监听", act.contains("rgEngine.isEnabled = false") &&
             !act.contains("rgEngine.setOnCheckedChangeListener"))
         val xml = readSrc("app/src/main/res/layout/assist_activity.xml")
-        assertTrue("ONNX 选项必须隐藏", xml.contains('android:visibility="gone"'))
+        assertTrue("ONNX 选项必须隐藏", xml.contains("android:visibility=\"gone\""))
         report("引擎固定 YOLO：配置/连线页/悬浮面板三处都不再出现用不了的 ONNX，切引擎不再清棋盘状态")
     }
 
