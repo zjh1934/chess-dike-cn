@@ -491,8 +491,8 @@ class TapChainTest {
             svc.contains("workerHandler.post { handleTapSingleFrame(f, seq) }"))
         assertFalse("空闲态缓存帧不能再有帧差阈值条件",
             svc.contains("if (lastFrame == null || ratio >= CHANGE_RATIO_MIN)"))
-        assertTrue("空闲态每帧无条件刷新最近屏幕画面",
-            svc.contains("lastFrame = imageToFrame(image)"))
+        assertTrue("每帧无条件刷新最近屏幕画面（v1.17 起在帧回调开头统一转一次像素）",
+            svc.contains("lastFrame = latestFrame") && svc.contains("val latestFrame = imageToFrame(image)"))
         assertTrue("静止屏幕要有兜底", svc.contains("TAP_CAPTURE_WAIT_MS"))
         report("插入点已前移到帧回调：点击即抓帧；空闲态每帧无条件刷新缓存，对方走子的小帧差不再丢")
     }
