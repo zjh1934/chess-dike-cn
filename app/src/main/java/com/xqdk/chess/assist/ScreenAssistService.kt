@@ -2092,7 +2092,9 @@ class ScreenAssistService : Service() {
             VoiceDiag.log(this, "中文播报", "未出招 → 语音提示一次「没看清棋盘，再点一次」（不静默收场）")
             // TTS 构造/朗读放主线程：本函数来自 worker 帧回调，TextToSpeech 需要主线程 Looper
             mainHandler.post {
-                voiceSpeaker?.speakTest("没看清棋盘，再点一次", config.ttsEngine)
+                // v1.19：speakTest 会 shutdown 共享实例；改用 speakNotice（不置 testMode）
+                (voiceSpeaker ?: VoiceSpeaker(this@ScreenAssistService).also { voiceSpeaker = it })
+                    .speakNotice("没看清棋盘，再点一次", config.ttsEngine)
             }
         }
         setStatus(status)
@@ -2112,6 +2114,21 @@ class ScreenAssistService : Service() {
         VoiceDiag.log(this, "点按出招",
             "硬预算兜底：${elapsed}ms 仍未播报 → 强制给声音（绝不静默）")
         when {
+            // v1.19：已把着法交给 TTS 但系统没出声 → 重建朗读器并补念一次
+            tapSessionSpoke && voiceSpeaker?.isConfirmed() != true -> {
+                val speaker = voiceSpeaker ?: VoiceSpeaker(this).also { voiceSpeaker = it }
+                speaker.repair()
+                val txt = tapLockedText ?: ""
+                VoiceDiag.log(this, "点按出招",
+                    "硬预算：已交稿但无出声回执 → 重建 TTS 并补念一次")
+                VoiceDiag.log(this, "朗读回执", "硬预算触发：未出声 → 重建补念")
+                mainHandler.post {
+                    // 只念纯中文着法，别把 "(b2b9)（暂定）" 也读出来
+                    val spoken = txt.removePrefix("建议").trim().substringBefore(' ')
+                    speaker.speakNotice(spoken.ifEmpty { "再看一眼棋盘" }, config.ttsEngine)
+                }
+                endTapSession("硬预算·已重建补念")
+            }
             tapSessionAwaitSettle && lastAnalysis != null -> {
                 searchSettled = true
                 VoiceDiag.log(this, "点按出招", "硬预算：强制定着 → 念当前最佳着一次")
@@ -2309,7 +2326,7 @@ class ScreenAssistService : Service() {
         resetSuggestionState()
         val text = if (next) "红" else "黑"
         VoiceDiag.log(this, "我方选择",
-            "面板点选：我方=$text（手动锁定·跨对局保持）旧=" +
+            "seq=$tapSessionSeq t=${System.currentTimeMillis()} 面板点选：我方=$text（手动锁定·跨对局保持）旧=" +
             (old?.let { if (it) "红" else "黑" } ?: "跟随识别") +
             " → 新=$text；后续所有点按均按${text}方支招")
         setStatus("我方已锁定为${text}方\n点棋盘即按${text}方支招")
@@ -2378,6 +2395,7 @@ class ScreenAssistService : Service() {
     @Volatile private var lastStatusText = "未启动"
     /** 状态文案进诊断日志的去重键：只在文案变化时记一行，避免引擎 info 期刷屏 */
     @Volatile private var lastDiagStatusText: String? = null
+    @Volatile private var lastDiagStatusTs = 0L
     /** setStatus 的瞬时提示文案：只在随后一次渲染中生效（此后回到常规状态文案），由主线程消费后清空 */
     @Volatile private var statusOverrideText: String? = null
     /** 最近一次已推送到通知栏的状态文本（通知去重：内容不变不 notify，根因 10） */
@@ -2398,8 +2416,12 @@ class ScreenAssistService : Service() {
         statusOverrideText = text
         // 所有状态变化都进增强功能诊断（去重）：点棋盘后界面显示什么、有没有超时
         // 提示、引擎有没有报错，日志里都能直接读到，不再只有 3 行 TTS 事件
-        if (text != lastDiagStatusText) {
+        // v1.19：03:26 诊断里「状态文案」占 154/600 行，把「我方选择」等关键行挤没了。
+        // 同一句状态 1 秒内不重复写，交替刷屏也收敛。
+        val nowMs = System.currentTimeMillis()
+        if (text != lastDiagStatusText || nowMs - lastDiagStatusTs > 1000L) {
             lastDiagStatusText = text
+            lastDiagStatusTs = nowMs
             VoiceDiag.log(this, "状态文案",
                 "${text.replace('\n', '／')} ｜ 会话=${if (tapSessionActive) "开" else "关"} " +
                     "闸口=${if (recognitionActive()) "开" else "关"}")
@@ -2664,6 +2686,10 @@ class ScreenAssistService : Service() {
             candidateText, config.voiceEnabled)) {
             TapSpeakGate.Decision.SPEAK -> {
                 tapSessionSpoke = true
+                // v1.19：朗读器可能已 shutdown / TTS 服务掉线，先自愈再交稿。
+                // 03:26 诊断里切黑后 7 次点按连「决策」行都没有，就是实例死了还用 ?. 静默跳过。
+                val speaker = voiceSpeaker ?: VoiceSpeaker(this).also { voiceSpeaker = it }
+                speaker.ensureAlive()
                 val text = candidateText ?: ""
                 tapLockedText = text
                 tapLockedArrowFrom = arrowFrom
@@ -2671,12 +2697,14 @@ class ScreenAssistService : Service() {
                 val delay = if (tapSuggestShownTs > 0L)
                     System.currentTimeMillis() - tapSuggestShownTs else 0L
                 logTapChain("⑤ 语音播报", "首着即念 → 箭头出现→播报=${delay}ms " +
-                    "支招文案=${text.replace('\n', '／')} 总开关=${config.voiceEnabled} → 交给 TTS 朗读纯中文着法")
+                    "支招文案=${text.replace('\n', '／')} 总开关=${config.voiceEnabled} → 交给 TTS（**是否真出声以「朗读回执」行为准**）")
                 VoiceDiag.log(this, "点按抓帧",
                     "seq=$tapSessionSeq 算出来→念出来=${delay}ms（切入点=箭头出现，未等定着 1.2s）")
-                voiceSpeaker?.onSuggestion(multiPv, config.voiceEnabled, text, config.ttsEngine,
+                speaker.onSuggestion(multiPv, config.voiceEnabled, text, config.ttsEngine,
                     advantageText ?: "", config.voiceReadMask)
-                endTapSession("已出招·已播报")
+                // v1.19：以前无条件写「已播报」，可系统 TTS 哑了 12 次日志还全是「已播报」。
+                // 改为按真实回执：拿到 onStart 才写「已出声」，没拿到绝不冒功。
+                endTapSession("已出招·已交TTS(待朗读回执)")
             }
             TapSpeakGate.Decision.MUTED -> {
                 tapLockedText = candidateText

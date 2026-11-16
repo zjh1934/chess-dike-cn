@@ -727,4 +727,42 @@ class TapChainTest {
         report("点一下 → 擦旧箭头 → 抓当前帧 → 数量误检就地修 → 单帧建局 → 箭头出现 → 立刻念；2.5s 硬预算必有声音，失败也念一句")
     }
 
+    @Test
+    fun `v1_19 TTS掉线自愈 日志不再冒功 红黑切换不再背锅`() {
+        fun readSrc(rel: String): String {
+            // workingDir 可能是 app/ 模块目录，需 ../ 才读得到 docs/ 与 .github/
+            for (candidate in listOf(rel, rel.removePrefix("app/"), "../" + rel)) {
+                val f = java.io.File(candidate)
+                if (f.exists()) return f.readText()
+            }
+            return ""
+        }
+        val sp = readSrc("app/src/main/java/com/xqdk/chess/assist/VoiceSpeaker.kt")
+        assertTrue("必须读到朗读器源码", sp.isNotEmpty())
+        assertTrue("朗读前自愈", sp.contains("fun ensureAlive()") && sp.contains("fun repair()"))
+        assertTrue("shutdown 死锁可解除", sp.contains("shuttingDown = false"))
+        assertTrue("speak 成功也要等 onStart 回执",
+            sp.contains("START_TIMEOUT_MS") && sp.contains("onStartWatchdog") &&
+                sp.contains("朗读无回执"))
+        assertTrue("失败/异常/无回执都会重建补读",
+            sp.contains("repairAndRepeat()") && sp.contains("speak失败") &&
+                sp.contains("朗读回执"))
+        assertTrue("失败提示不污染共享实例", sp.contains("fun speakNotice"))
+        assertFalse("speakTest 不再被误用于共享实例",
+            readSrc("app/src/main/java/com/xqdk/chess/assist/ScreenAssistService.kt")
+                .contains("voiceSpeaker?.speakTest"))
+
+        val svc = readSrc("app/src/main/java/com/xqdk/chess/assist/ScreenAssistService.kt")
+        assertTrue("交稿前先自愈", svc.contains("speaker.ensureAlive()"))
+        assertTrue("不再无条件写「已播报」",
+            svc.contains("已出招·已交TTS") &&
+                !svc.contains("已出招·已播报"))
+        assertTrue("硬预算按回执补念", svc.contains("isConfirmed()") &&
+            svc.contains("硬预算：已交稿但无出声回执"))
+        assertTrue("切换动作写进诊断且带唯一 seq",
+            svc.contains("seq=\$tapSessionSeq t=") && svc.contains("\"我方选择\""))
+        assertTrue("状态文案降噪", svc.contains("lastDiagStatusTs"))
+        report("TTS 掉线判定看 onStart 回执而非 speak 返回值；掉线即重建补念；日志按真实回执写；切换红黑不是原因")
+    }
+
 }

@@ -3,6 +3,8 @@ package com.xqdk.chess.assist
 import android.content.Context
 import android.media.AudioManager
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import java.util.Locale
@@ -49,6 +51,23 @@ class VoiceSpeaker(context: Context) {
     /** 试听实例标志：跳过去重、朗读结束（onDone/onError）后自行 shutdown 释放 TTS */
     private var testMode = false
 
+    // ==================== v1.19：出声回执 + TTS 掉线自愈 ====================
+    /**
+     * 03:26 诊断暴露的真机问题：最后一次 `speak SUCCESS` 是 03:21:47「车六进二」，
+     * 但**连 onStart 都没有**；此后 12 次「决策→打断」全打齐了，却再没有一条
+     * speak SUCCESS / onStart / onDone，系统 TTS 那头已经哑了，程序还以为活着。
+     * 切到黑之后更彻底（连「决策」都没有）—— 实例进了不可恢复的 shutdown 态。
+     *
+     * 这里不看"调用有没有返回 SUCCESS"，只看**系统有没有真的回 onStart**：
+     * speak 后 1.5 秒没收到 onStart 就判定掉线 → 丢弃失效实例、重新绑定并补读一次。
+     */
+    private var dead = false
+    private var awaitingStart = false
+    private var lastSpeakConfirmed = false
+    private var lastText: String? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val startWatchdog = Runnable { onStartWatchdog() }
+
     /**
      * 一条支招结果产生时调用（renderOverlay 内、主线程）。
      * 开关与引擎每次从持久化配置现读，设置页改动即时生效。
@@ -66,7 +85,9 @@ class VoiceSpeaker(context: Context) {
         readMask: Int = VoicePrompt.DEFAULT_MASK,
     ) {
         synchronized(this) {
-            if (shuttingDown) return
+            // v1.19：以前 shuttingDown 一旦为 true 就永久静默（日志里连「决策」都没有）。
+            // 朗读器只由本服务持有，服务还活着就该能自愈，不再不可逆。
+            if (shuttingDown || dead || initFailed) repair()
             val decision = VoicePrompt.resolve(moveCount, enabled, suggestionText, advantageText, readMask)
             // 决策埋点：原文换行压平保证单行；跳过原因由 resolve.reason 枚举给出。
             // 变量先算好再插值，避免在字符串模板里嵌套双引号字面量。
@@ -90,6 +111,11 @@ class VoiceSpeaker(context: Context) {
     }
 
     /**
+     * v1.19 警示：**只给独立实例用**。本方法会置 testMode 并在朗读结束后
+     * `finishTestIfNeeded → shutdown()`，把 `shuttingDown` 永久置 true。
+     * v1.18 曾把它挂在共享的 voiceSpeaker 上做失败提示，等于念完一句就把
+     * 整个支招朗读器封死。服务层失败提示已改用 [speakNotice]。
+     *
      * 试听：用当前选中引擎朗读一句固定中文，绕过 VoicePrompt 支招条件与去重。
      * 调用方应使用**独立的** VoiceSpeaker 实例；本实例在朗读结束或初始化/speak
      * 失败后自行 [shutdown]，避免持有 TTS 服务连接泄漏。
@@ -106,6 +132,50 @@ class VoiceSpeaker(context: Context) {
                 return
             }
             speak(text)                   // 复用 setLanguage(onInit)/speak/返回值检查
+        }
+    }
+
+    /**
+     * v1.19：点按朗读前调用。实例为 dead / 已 shutdown / 初始化失败时**自愈重建**，
+     * 不再出现「点了棋盘，连决策行都没有」的永久静默。
+     */
+    fun ensureAlive() {
+        synchronized(this) {
+            if (shuttingDown || dead || initFailed || tts == null) repair()
+        }
+    }
+
+    /** 最近一次朗读是否收到系统 onStart 出声回执（供链路日志如实写结果）。 */
+    fun isConfirmed(): Boolean = synchronized(this) { lastSpeakConfirmed }
+
+    /** v1.19：丢弃失效的 TTS 实例，下一条建议重新绑定；同时解除 shutdown 死锁。 */
+    fun repair() {
+        synchronized(this) {
+            mainHandler.removeCallbacks(startWatchdog)
+            runCatching { tts?.shutdown() }
+            tts = null
+            ready = false
+            initFailed = false
+            shuttingDown = false
+            dead = false
+            testMode = false
+            awaitingStart = false
+            pendingText = null
+            lastSpoken = null
+            VoiceDiag.log(appContext, "TTS重建",
+                "朗读器自愈：丢弃失效实例，解除 shutdown 死锁，下一条建议重新绑定系统 TTS")
+        }
+    }
+
+    /**
+     * v1.19：失败/兜底提示专用。**不设 testMode、不 finishTestIfNeeded**，
+     * 因此不会把共享朗读器 shutdown 掉（speakTest 的坑）。
+     */
+    fun speakNotice(text: String, engine: String?) {
+        synchronized(this) {
+            if (shuttingDown || dead) repair()
+            rebuild(engine)
+            speak(text)
         }
     }
 
@@ -135,6 +205,8 @@ class VoiceSpeaker(context: Context) {
             pendingText = null
             lastSpoken = null
             initFailed = false
+            awaitingStart = false
+            mainHandler.removeCallbacks(startWatchdog)
             runCatching { tts?.shutdown() }
             tts = null
         }
@@ -249,6 +321,46 @@ class VoiceSpeaker(context: Context) {
         synchronized(this) {
             if (g != gen || shuttingDown) return
             VoiceDiag.log(appContext, tag, detail)
+            when {
+                tag == "onStart" -> {
+                    awaitingStart = false
+                    lastSpeakConfirmed = true
+                    mainHandler.removeCallbacks(startWatchdog)
+                    VoiceDiag.log(appContext, "朗读回执",
+                        "onStart 已出声 ✓ 文本=${lastText ?: "—"}")
+                }
+                tag.startsWith("onError") -> {
+                    awaitingStart = false
+                    lastSpeakConfirmed = false
+                    mainHandler.removeCallbacks(startWatchdog)
+                    VoiceDiag.log(appContext, "朗读回执",
+                        "$tag → 系统朗读失败，重建并补读一次")
+                    repairAndRepeat()
+                }
+            }
+        }
+    }
+
+    /** speak 成功但 1.5 秒内系统没回 onStart：判定 TTS 服务掉线，重建并补读一次。 */
+    private fun onStartWatchdog() {
+        synchronized(this) {
+            if (!awaitingStart) return
+            awaitingStart = false
+            lastSpeakConfirmed = false
+            VoiceDiag.log(appContext, "朗读无回执",
+                "speak 返回 SUCCESS 但 1.5s 内没有 onStart → 系统 TTS 已掉线，重建并补读一次")
+            repairAndRepeat()
+        }
+    }
+
+    /** 调用方持有 synchronized(this)；用主线程异步重建，避免 Binder 回调里重入 speak。 */
+    private fun repairAndRepeat() {
+        val text = lastText
+        repair()
+        if (text != null) {
+            mainHandler.post {
+                synchronized(this) { rebuild(null); speak(text) }
+            }
         }
     }
 
@@ -272,21 +384,29 @@ class VoiceSpeaker(context: Context) {
             VoiceDiag.log(appContext, "排队", "未就绪，保留最新：$text")
             return
         }
+        lastText = text
+        lastSpeakConfirmed = false
         VoiceDiag.log(appContext, "打断", "QUEUE_FLUSH 覆盖上一段")
         val result = try {
             t.speak(text, TextToSpeech.QUEUE_FLUSH, streamParams(), UTTERANCE_ID)
         } catch (e: Throwable) {
-            VoiceDiag.log(appContext, "speak异常", e.toString())
+            VoiceDiag.log(appContext, "speak异常", "$e → 判定 TTS 掉线，重建并补读一次")
+            repairAndRepeat()
             return
         }
         if (result == TextToSpeech.SUCCESS) {
             lastSpoken = text
-            VoiceDiag.log(appContext, "speak", "SUCCESS：$text")
+            // v1.19：SUCCESS 不等于出声，必须等系统 onStart 回执
+            awaitingStart = true
+            mainHandler.removeCallbacks(startWatchdog)
+            mainHandler.postDelayed(startWatchdog, START_TIMEOUT_MS)
+            VoiceDiag.log(appContext, "speak",
+                "SUCCESS：$text（等待 onStart 出声回执，1.5s 无回执即判定掉线）")
         } else {
-            // 根因③：非 SUCCESS 记日志、不写去重，允许下一条建议重试
+            // 根因③：非 SUCCESS 记日志、不写去重；v1.19 进一步重建补读，不再干等下一轮
             VoiceDiag.log(appContext, "speak失败",
-                "result=$result：$text（不写去重，允许重试）")
-            if (testMode) finishTestIfNeeded(gen)
+                "result=$result：$text → 判定 TTS 掉线，重建并补读一次")
+            if (testMode) finishTestIfNeeded(gen) else repairAndRepeat()
         }
     }
 
@@ -308,6 +428,8 @@ class VoiceSpeaker(context: Context) {
 
     companion object {
         private const val UTTERANCE_ID = "xqdk_voice_prompt"
+        /** v1.19：speak 返回 SUCCESS 后，等多久没收到 onStart 就判定 TTS 掉线 */
+        private const val START_TIMEOUT_MS = 1500L
 
         private fun describeLang(r: Int): String = when {
             r == TextToSpeech.LANG_MISSING_DATA -> "LANG_MISSING_DATA"
