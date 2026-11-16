@@ -713,8 +713,8 @@ class ScreenAssistService : Service() {
                 // v1.16 只在 !recognitionActive() 时刷新，点按会话期间 lastFrame 停更，
                 // 兜底拿到的还是点击前缓存帧 —— 用户说的「没读当前屏幕」有一半来自这里。
                 // 只存像素：不识别 / 不推理 / 不支招 / 不朗读。
-                val frame = imageToFrame(image)
-                lastFrame = frame
+                val latestFrame = imageToFrame(image)
+                lastFrame = latestFrame
                 // v1.14 插入点：点棋盘后到达的**第一帧**无条件直接送识别。
                 // 不查帧节流 / 帧差阈值 / 节拍器 / pendingFrame —— 这就是「点下去
                 // 立刻读屏幕」。旧实现把点按挂在帧循环尾端、拿点击前缓存帧识别，
@@ -723,7 +723,7 @@ class ScreenAssistService : Service() {
                         tapCapturePending, tapCaptureSeq, tapSessionSeq)) {
                     val seq = tapCaptureSeq
                     val attempt = tapCaptureAttempt
-                    val f = frame
+                    val f = latestFrame
                     cancelTapCapture()
                     VoiceDiag.log(this, "点按抓帧",
                         "seq=$seq 第${attempt}帧到达 → 立即识别（未查节拍器/未等帧差）")
@@ -765,10 +765,9 @@ class ScreenAssistService : Service() {
                     consumeIdleFrame(image, markChange = false)
                     return
                 }
-                val frame = imageToFrame(image)
-                lastFrame = frame
+                // v1.17：复用本帧已转好的像素，不再重复 imageToFrame
                 pendingFrame = true
-                workerHandler.post { pendingFrame = false; handleFrame(frame) }
+                workerHandler.post { pendingFrame = false; handleFrame(latestFrame) }
             } finally {
                 image.close()
             }

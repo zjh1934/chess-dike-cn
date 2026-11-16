@@ -1,5 +1,7 @@
 package com.xqdk.chess.assist
 
+import com.xqdk.chess.gamelogic.Piece
+
 /**
  * v1.17：点按单帧「与上一局面是否说得通」。纯 JVM，CI 可直接断言。
  *

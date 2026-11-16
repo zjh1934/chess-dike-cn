@@ -661,7 +661,7 @@ class TapChainTest {
             svc.contains("private fun retryTapCapture(seq: Int, fromAttempt: Int, why: String): Boolean") &&
                 svc.contains("if (retryTapCapture(seq, attempt, why)) return"))
         assertTrue("抓帧窗口用尽必收场", svc.contains("抓帧窗口用尽 → 明确收场"))
-        assertTrue("点按会话期间 lastFrame 仍每帧刷新", svc.contains("lastFrame = frame"))
+        assertTrue("点按会话期间 lastFrame 仍每帧刷新", svc.contains("lastFrame = latestFrame"))
         report("点一下 → 抓帧（最多3帧/700ms）→ 两帧一致且与上局面说得通 → 建局 → 箭头出现 → 立刻念一次；窗口用尽必收场")
     }
 
