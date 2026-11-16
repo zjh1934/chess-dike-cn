@@ -285,6 +285,8 @@ class ScreenAssistService : Service() {
     private var tapCaptureSeq = 0
     /** v1.16：本轮点按已试到第几帧（1 起）；失败且未超上限就立刻再抓一帧。 */
     private var tapCaptureAttempt = 0
+    /** v1.17：本轮第一帧合法但还没等到「连续两帧一致」的局面（防误检/过渡帧瞎指挥）。 */
+    private var tapPendingLegal: RecognitionResult? = null
     /** v1.16：第一条建议（箭头出现）时刻，用于日志「箭头→播报」耗时。 */
     private var tapSuggestShownTs = 0L
     /** v1.16：本轮念过的那招，锁定面板文案/箭头，避免「念的」和「画的」不一致。 */
@@ -707,6 +709,12 @@ class ScreenAssistService : Service() {
             // 绝不进识别管线、不调 pacer、不推理、不支招、不朗读。
             val image = reader.acquireLatestImage() ?: return
             try {
+                // v1.17：每真实帧只转一次像素，并**无条件**刷新「最近屏幕画面」。
+                // v1.16 只在 !recognitionActive() 时刷新，点按会话期间 lastFrame 停更，
+                // 兜底拿到的还是点击前缓存帧 —— 用户说的「没读当前屏幕」有一半来自这里。
+                // 只存像素：不识别 / 不推理 / 不支招 / 不朗读。
+                val frame = imageToFrame(image)
+                lastFrame = frame
                 // v1.14 插入点：点棋盘后到达的**第一帧**无条件直接送识别。
                 // 不查帧节流 / 帧差阈值 / 节拍器 / pendingFrame —— 这就是「点下去
                 // 立刻读屏幕」。旧实现把点按挂在帧循环尾端、拿点击前缓存帧识别，
@@ -715,7 +723,7 @@ class ScreenAssistService : Service() {
                         tapCapturePending, tapCaptureSeq, tapSessionSeq)) {
                     val seq = tapCaptureSeq
                     val attempt = tapCaptureAttempt
-                    val f = imageToFrame(image)
+                    val f = frame
                     cancelTapCapture()
                     VoiceDiag.log(this, "点按抓帧",
                         "seq=$seq 第${attempt}帧到达 → 立即识别（未查节拍器/未等帧差）")
@@ -781,12 +789,8 @@ class ScreenAssistService : Service() {
             lastMotionTs = System.currentTimeMillis()
             screenChangedSinceRec = true
         }
-        // v1.14：无条件保留「最近一次真实屏幕画面」。
-        // 原实现只在帧差 >= 0.2% 时更新：象棋只动一个小棋子，帧差常低于阈值，
-        // 对方走完后 lastFrame 还停在几十秒前 —— 点棋盘拿旧帧识别，就是用户说的
-        //「它还没去识别当前的局面」。这里只存像素，不识别/不推理/不支招/不朗读，
-        //「不点棋盘完全不动」的语义不变。
-        lastFrame = imageToFrame(image)
+        // v1.17：lastFrame 已由 onImageAvailable 每真实帧无条件刷新，这里不再重复转像素。
+        // 本函数仍负责记录「画面变化」标志（供自动档停稳门槛用），但绝不触发识别。
     }
 
     /**
@@ -1208,7 +1212,14 @@ class ScreenAssistService : Service() {
     }
 
     /** 主页切换识别引擎（worker 帧循环里应用；切换后局面重新确认） */
-    fun setRecognizerEngine(name: String) { pendingEngine = name }
+    /** v1.17：只接受 YOLO；ONNX 请求一律忽略（模型不随包，切过去必然失败）。 */
+    fun setRecognizerEngine(name: String) {
+        if (name != ENGINE_YOLO) {
+            VoiceDiag.log(this, "识别引擎", "忽略切换请求=$name（本版固定 YOLO）")
+            return
+        }
+        pendingEngine = ENGINE_YOLO
+    }
 
     /**
      * 性能诊断开关（连线页"性能诊断"按钮，原仅 adb 改 shared_prefs 可达——真机
@@ -1261,49 +1272,27 @@ class ScreenAssistService : Service() {
         }
     }
 
-    /** 按配置初始化识别引擎；onnx 模型加载重（~21.5MB），放后台线程，期间帧走跳过逻辑 */
+    /** v1.17：识别引擎**永久固定 YOLO**。
+     *
+     * 用户实测「有两种模式，第二种可以用，第一种不能用，选第一种自动跳到第二种」：
+     * 第一种是 ONNX 角点式（配置默认 onnx），但 ONNX 模型受版权不随包分发
+     * （assets/models/*.onnx 被 .gitignore 排除），每次启动都 0ms 加载失败 → 回退 YOLO；
+     * 连线页 onResume 又按运行态回填 RadioGroup，于是选了 ONNX 又跳回 YOLO。
+     * 更糟：悬浮面板「引擎」芯片一点就 `switchEngine(onnx)`，期间 tracker 被 reset、
+     * sessionGrid 清空、onnxEngine 为 null —— 紧接着点棋盘必然识别失败，表现就是
+     * 「有时管用有时不管用」。
+     *
+     * 模型不会随包出现，这个选项永远不可能可用。按用户「装上点一下就要能用」的要求，
+     * 直接把它摘掉：配置幂等归位、UI 不再有选择、面板芯片只读、这里不再启动任何加载线程。
+     */
     private fun initEngine(name: String) {
-        engineName = name
-        if (name != ENGINE_ONNX) return
-        // 加载代际：ONNX→YOLO→ONNX 快速切换时两个 loader 都可能通过 engineName 校验，
-        // 旧 loader 会覆盖新 loader 的会话（旧者永不 release 泄漏 native 内存）；
-        // 以代际标识让过期 loader 自行释放。自增持锁：与 onDestroy 的代际失效
-        // （engineGen++，体检 P0）并发时不丢增——丢增会让两个 loader 同代际、
-        // 旧者覆盖新者且永不 release
-        val gen = synchronized(onnxEngineLock) { ++engineGen }
-        Thread {
-            // profiling 由 AssistConfig.benchProfiling 控制（诊断开关，连线页"性能
-            // 诊断"按钮切换，切换经 setBenchProfiling 重建引擎后生效）；诊断识别行
-            // 的写行收口在服务层（handleFrameOnnx），识别器只暴露分段耗时快照
-            val eng = OnnxBoardRecognizer(assets, profiling = config.benchProfiling)
-            val loadStart = System.currentTimeMillis()
-            val ok = try { eng.load() } catch (t: Throwable) {
-                Log.w(TAG, "onnx load threw", t); false
-            }
-            synchronized(onnxEngineLock) {
-                // 期间已被切换走或已有更新的加载批次：释放会话（二次校验与赋值同锁）
-                if (engineName != ENGINE_ONNX || gen != engineGen) {
-                    eng.release()
-                    return@Thread
-                }
-                onnxEngine = if (ok) eng else null
-            }
-            if (!ok) {
-                engineName = ENGINE_YOLO
-                VoiceDiag.log(this, "识别引擎", "ONNX 加载失败（${System.currentTimeMillis() - loadStart}ms）→ 回退 YOLO")
-                setStatus("ONNX 引擎加载失败\n已回退 YOLO 识别")
-            } else {
-                VoiceDiag.log(this, "识别引擎", "ONNX 加载成功（${System.currentTimeMillis() - loadStart}ms）")
-            }
-            diagLog?.appendEvent("ONNX加载",
-                if (ok) "成功，${System.currentTimeMillis() - loadStart}ms"
-                else "失败（${System.currentTimeMillis() - loadStart}ms）→ 回退 YOLO")
-            Log.i(TAG, "onnx engine: ${if (ok) "ready" else "load failed, fallback to yolo"}")
-        }.start()
+        engineName = ENGINE_YOLO
+        VoiceDiag.log(this, "识别引擎",
+            "固定 YOLO（模型随包、零加载等待），不再尝试 ONNX；请求=$name 一律按 YOLO 处理")
     }
-
     /** 切换引擎：释放旧 ONNX 会话、重置跟踪状态（两引擎输出细节有差异，重新确认更稳） */
     private fun switchEngine(want: String) {
+        if (want != ENGINE_YOLO) return   // v1.17：不再有第二种引擎可切
         Log.i(TAG, "switch engine: $engineName -> $want")
         diagLog?.appendEvent("识别引擎切换", "$engineName → $want")
         tracker.reset()
@@ -1321,7 +1310,7 @@ class ScreenAssistService : Service() {
         invalidStreak = 0
         screenChangedSinceRec = true
         engineName = want
-        if (want == ENGINE_ONNX) initEngine(want)
+        // v1.17：引擎固定，不再触发任何 ONNX 加载
     }
 
     /** 自动档的确认链出口：保留上游原实现（克隆快照 / 历史 / 重置建议 / 发支招）。
@@ -1753,14 +1742,10 @@ class ScreenAssistService : Service() {
             OverlayAction.TOGGLE_MY_SIDE -> toggleMySide()
             // v1.13：哈希档位保持默认 256MB，不再提供面板循环（cycleHash 已移除）
             OverlayAction.CYCLE_ENGINE -> {
-                // 识别引擎热切换：经 pendingEngine 在 worker 帧循环应用（不在 UI 线程
-                // 释放/加载会话），切换后 tracker 重置、局面重新确认。
-                // 同步落盘：悬浮窗热切换不写回配置的话，重开连线页（AssistActivity
-                // onServiceConnected 按配置下发）会把热切换静默回滚
-                val want = if (engineName == ENGINE_ONNX) ENGINE_YOLO else ENGINE_ONNX
-                AssistConfig(this).recognizerEngine = want
-                setRecognizerEngine(want)
-                setStatus("切换识别引擎：${if (want == ENGINE_ONNX) "ONNX 角点式" else "YOLO 检测式"}\n切换后重新确认棋盘")
+                // v1.17：引擎芯片改成只读。以前点它会切到根本加载不了的 ONNX，
+                // 顺带 reset tracker / 清 sessionGrid，紧接着点棋盘就「没反应」。
+                VoiceDiag.log(this, "识别引擎", "面板芯片点击：保持 YOLO（本版固定，无需切换）")
+                setStatus("识别引擎：YOLO（本版固定）\n点棋盘即可支招")
             }
             OverlayAction.CYCLE_MULTIPV -> cycleMultiPv()
             OverlayAction.FLASH_STOP -> {
@@ -1837,6 +1822,7 @@ class ScreenAssistService : Service() {
         tapCapturePending = true
         tapCaptureSeq = seq
         tapCaptureAttempt = 1
+        tapPendingLegal = null
         tapCaptureStartTs = System.currentTimeMillis()
         tapSuggestShownTs = 0L
         // 清掉上一轮锁定的建议：本轮重新算、重新念、重新画
@@ -1874,17 +1860,20 @@ class ScreenAssistService : Service() {
      * 「点了它没去读屏幕」。这里在 700ms 窗口内最多再抓 2 帧（每帧 YOLO 约 130ms），
      * 第一帧合法就继续建局支招；全不合法才如实收场并写明每帧拦下的具体原因。
      */
-    private fun retryTapCapture(seq: Int, fromAttempt: Int, why: String) {
-        val elapsed = System.currentTimeMillis() - tapCaptureStartTs
+    private fun retryTapCapture(seq: Int, fromAttempt: Int, why: String): Boolean {
+        // v1.17：单一时钟判定 + 返回 Boolean。v1.16 外层与内层各读一次时钟，
+        // 边界处内层提前 return、外层却已 return → 会话不收场、无提示，要静默等 12 秒，
+        // 用户感觉就是「点了他没反应」。现在外层一律按本返回值决定是否收场。
         if (!tapSessionActive || seq != tapSessionSeq ||
             fromAttempt >= TAP_CAPTURE_RETRY_MAX ||
-            elapsed >= TAP_CAPTURE_RETRY_WINDOW_MS) return
+            System.currentTimeMillis() - tapCaptureStartTs >= TAP_CAPTURE_RETRY_WINDOW_MS) return false
         tapCaptureAttempt = fromAttempt + 1
         tapCapturePending = true
         VoiceDiag.log(this, "点按抓帧",
-            "seq=$seq 第${fromAttempt}帧不合法（$why）→ 立即再抓第${tapCaptureAttempt}帧（不等节拍器、不叫用户重点）")
+            "seq=$seq 第${fromAttempt}帧待确认（$why）→ 立即再抓第${tapCaptureAttempt}帧（不等节拍器、不叫用户重点）")
         forceCaptureFrame()
         armTapCaptureTimeout()
+        return true
     }
 
     /** v1.14：点击瞬间先取 ImageReader 缓冲里现成的帧；有就同步识别，最快。 */
@@ -1925,6 +1914,15 @@ class ScreenAssistService : Service() {
     private fun onTapCaptureTimeout(seq: Int) {
         if (!tapSessionActive || seq != tapSessionSeq || !tapCapturePending) return
         cancelTapCapture()
+        // v1.17：窗口用尽就明确收场，绝不再重复识别同一张缓存帧、更不静默等 12 秒。
+        if (tapCaptureAttempt >= TAP_CAPTURE_RETRY_MAX ||
+            System.currentTimeMillis() - tapCaptureStartTs >= TAP_CAPTURE_RETRY_WINDOW_MS) {
+            VoiceDiag.log(this, "点按抓帧",
+                "seq=$seq 抓帧窗口用尽 → 明确收场（不再重复用同一帧，也不静默等待）")
+            setStatus("画面没认稳\n再点一次棋盘")
+            endTapSession("抓帧窗口用尽")
+            return
+        }
         val f = lastFrame?.let { Frame(it.width, it.height, it.argb.copyOf()) }
         if (f == null) {
             VoiceDiag.log(this, "点按抓帧", "seq=$seq 兜底失败：没有任何屏幕帧")
@@ -2001,21 +1999,36 @@ class ScreenAssistService : Service() {
         if (!legal) {
             val why = listOf(verdict.reason, verdict.detail, fail)
                 .filter { it.isNotBlank() && it != "—" }.joinToString(" / ")
-            if (attempt < TAP_CAPTURE_RETRY_MAX &&
-                System.currentTimeMillis() - tapCaptureStartTs < TAP_CAPTURE_RETRY_WINDOW_MS) {
-                VoiceDiag.log(this, "点按链路",
-                    "② 第${attempt}帧没过门槛（$why）→ 不收场，立刻再抓一帧")
-                retryTapCapture(seq, attempt, why)
-                return
-            }
+            if (retryTapCapture(seq, attempt, why)) return
             logTapChain("② 识别失败（链路在此收场）",
                 "耗时=${cost}ms 已试 ${tapSessionRecCount} 帧，均不合法：$why → 提示再点一次，不拿错局面算")
             setStatus("这几帧没认清棋盘\n再点一次棋盘")
             endTapSession("未识别·不合法(已试${tapSessionRecCount}帧)")
             return
         }
-        logTapChain("② 识别完成", "第${attempt}帧认准 耗时=${cost}ms 合法=true → 交给支招")
-        applyTapDirectBoard(result!!)
+        val r = result!!
+        val hasMore = attempt < TAP_CAPTURE_RETRY_MAX &&
+            System.currentTimeMillis() - tapCaptureStartTs < TAP_CAPTURE_RETRY_WINDOW_MS
+        val prevLegal = tapPendingLegal
+        val plausible = TapBoardStep.check(currentCanonical, r.canonical, mySideIsRed())
+        val consensus = TapFrameConsensus.decide(
+            prevLegal?.canonical, r.canonical, hasMore, plausible.plausible)
+        VoiceDiag.log(this, "点按抓帧",
+            "seq=$seq 第${attempt}帧 合法 → 一致性=${consensus.reason} " +
+            "与上一局面=${plausible.reason}")
+        if (!consensus.accept) {
+            // 两帧不一致时以新帧为准，再抓一帧确认；窗口用尽且说不通就不支招
+            tapPendingLegal = r
+            if (retryTapCapture(seq, attempt, consensus.reason)) return
+            logTapChain("② 一致性未确认（链路在此收场）",
+                "已试 ${tapSessionRecCount} 帧：${consensus.reason}；${plausible.reason} → 不拿可疑局面支招")
+            setStatus("这一帧没认稳\n再点一次棋盘")
+            endTapSession("未认稳·不支招")
+            return
+        }
+        logTapChain("② 识别完成", "第${attempt}帧 ${consensus.reason} 耗时=${cost}ms → 交给支招")
+        tapPendingLegal = null
+        applyTapDirectBoard(r)
     }
 
     /** v1.12：按这一帧建局并发一次支招。我方阵营用原作者口径「屏幕下方＝我方」单帧定。 */

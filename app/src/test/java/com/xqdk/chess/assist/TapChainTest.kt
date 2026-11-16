@@ -589,4 +589,80 @@ class TapChainTest {
         report("点一下 → 抓帧（不合法立即再抓，最多 3 帧/700ms）→ 认准 → 箭头出现 → 立刻念一次 → 锁定画面，5 个节点全通")
     }
 
+    @Test
+    fun `v1_17 引擎固定 YOLO 不再有选了又跳回的第二种`() {
+        fun readSrc(rel: String): String {
+            // workingDir 可能是 app/ 模块目录，需 ../ 才读得到 docs/ 与 .github/
+            for (candidate in listOf(rel, rel.removePrefix("app/"), "../" + rel)) {
+                val f = java.io.File(candidate)
+                if (f.exists()) return f.readText()
+            }
+            return ""
+        }
+        val cfg = readSrc("app/src/main/java/com/xqdk/chess/assist/AssistConfig.kt")
+        assertTrue("配置读取必须幂等归位 yolo", cfg.contains('get() = "yolo"'))
+        val svc = readSrc("app/src/main/java/com/xqdk/chess/assist/ScreenAssistService.kt")
+        assertTrue("面板芯片不再切引擎", svc.contains("面板芯片点击：保持 YOLO") &&
+            svc.contains("识别引擎：YOLO（本版固定）"))
+        assertFalse("面板芯片绝不能再触发 switchEngine", svc.contains("setRecognizerEngine(want)"))
+        assertFalse("启动不再加载 ONNX 模型", svc.contains("OnnxBoardRecognizer\u0028assets"))
+        val act = readSrc("app/src/main/java/com/xqdk/chess/assist/ui/AssistActivity.kt")
+        assertTrue("连线页单选不再注册切换监听", act.contains("rgEngine.isEnabled = false") &&
+            !act.contains("rgEngine.setOnCheckedChangeListener"))
+        val xml = readSrc("app/src/main/res/layout/assist_activity.xml")
+        assertTrue("ONNX 选项必须隐藏", xml.contains('android:visibility="gone"'))
+        report("引擎固定 YOLO：配置/连线页/悬浮面板三处都不再出现用不了的 ONNX，切引擎不再清棋盘状态")
+    }
+
+    @Test
+    fun `v1_17 与上一局面说得通才认 可疑帧不支招`() {
+        val start = AssistBoard.canonicalStart()
+        assertTrue("首次点按放行", TapBoardStep.check(null, start, true).plausible)
+        assertTrue("重复点同一局面放行", TapBoardStep.check(start, start, true).plausible)
+        // 对方（黑）走一步：b9 的卒/马移到 b8，恰好 2 格变化
+        val step = AssistBoard.clone(start)
+        val mover = step[0][1]
+        step[0][1] = Piece.EMPTY
+        step[1][1] = mover
+        val v = TapBoardStep.check(start, step, true)
+        assertTrue("对方一步必须放行（$v）", v.plausible)
+        // 误检：凭空少 3 个子 → 与上一局面说不通
+        val broken = AssistBoard.clone(start)
+        broken[3][0] = Piece.EMPTY
+        broken[3][2] = Piece.EMPTY
+        broken[3][4] = Piece.EMPTY
+        assertFalse("少几个子的可疑帧必须拦下",
+            TapBoardStep.check(start, broken, true).plausible)
+        assertTrue("新对局满 32 子放行", TapBoardStep.check(broken, start, true).plausible)
+        report("一步校验：首次/重复点/对方走一步/新开局放行；凭空多少子的误检帧一律不建局")
+    }
+
+    @Test
+    fun `v1_17 两帧一致才建局 且窗口用尽必收场`() {
+        val start = AssistBoard.canonicalStart()
+        assertTrue("连续两帧一致立刻采纳（零等待）",
+            TapFrameConsensus.decide(start, start, true, true).accept)
+        assertFalse("第一帧合法且还能再抓 → 再抓一帧确认",
+            TapFrameConsensus.decide(null, start, true, true).accept)
+        assertTrue("窗口用尽但与上一局面说得通 → 放行不卡死",
+            TapFrameConsensus.decide(null, start, false, true).accept)
+        assertFalse("窗口用尽且可疑 → 明确不支招",
+            TapFrameConsensus.decide(null, start, false, false).accept)
+        fun readSrc(rel: String): String {
+            // workingDir 可能是 app/ 模块目录，需 ../ 才读得到 docs/ 与 .github/
+            for (candidate in listOf(rel, rel.removePrefix("app/"), "../" + rel)) {
+                val f = java.io.File(candidate)
+                if (f.exists()) return f.readText()
+            }
+            return ""
+        }
+        val svc = readSrc("app/src/main/java/com/xqdk/chess/assist/ScreenAssistService.kt")
+        assertTrue("重试单一时钟且返回 Boolean",
+            svc.contains("private fun retryTapCapture(seq: Int, fromAttempt: Int, why: String): Boolean") &&
+                svc.contains("if (retryTapCapture(seq, attempt, why)) return"))
+        assertTrue("抓帧窗口用尽必收场", svc.contains("抓帧窗口用尽 → 明确收场"))
+        assertTrue("点按会话期间 lastFrame 仍每帧刷新", svc.contains("lastFrame = frame"))
+        report("点一下 → 抓帧（最多3帧/700ms）→ 两帧一致且与上局面说得通 → 建局 → 箭头出现 → 立刻念一次；窗口用尽必收场")
+    }
+
 }

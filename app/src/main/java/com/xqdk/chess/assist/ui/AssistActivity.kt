@@ -281,18 +281,14 @@ class AssistActivity : AppCompatActivity() {
             projectionLauncher.launch(mpm.createScreenCaptureIntent())
         }
 
-        // 识别引擎：ONNX 角点式（默认，对未收录皮肤泛化好）/ YOLO 检测式；运行中热切换
+        // v1.17：识别引擎固定 YOLO，不再提供第二种（ONNX 模型不随包，选了必失败回跳）。
         val cfg = com.xqdk.chess.assist.AssistConfig(this)
         val rgEngine = findViewById<RadioGroup>(R.id.rg_recognizer_engine)
-        findViewById<RadioButton>(
-            if (cfg.recognizerEngine == ScreenAssistService.ENGINE_YOLO) R.id.rb_engine_yolo
-            else R.id.rb_engine_onnx
-        ).isChecked = true
-        rgEngine.setOnCheckedChangeListener { _, id ->
-            cfg.recognizerEngine = if (id == R.id.rb_engine_yolo)
-                ScreenAssistService.ENGINE_YOLO else ScreenAssistService.ENGINE_ONNX
-            service?.setRecognizerEngine(cfg.recognizerEngine)
-        }
+        findViewById<RadioButton>(R.id.rb_engine_yolo).isChecked = true
+        findViewById<RadioButton>(R.id.rb_engine_onnx).isEnabled = false
+        rgEngine.isEnabled = false
+        // 不再注册 setOnCheckedChangeListener：这一行只读，点它不会切引擎、不会清棋盘状态
+        cfg.recognizerEngine = ScreenAssistService.ENGINE_YOLO
 
         // 思考制式：深度制（默认，建议更强）/ 时间制（固定时长收束，节奏可预期）；
         // 运行中热切换——悬浮窗据此只显示对应制式的切换芯片（深度档或时长档）

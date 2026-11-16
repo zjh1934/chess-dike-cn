@@ -274,8 +274,8 @@
                 tools:ignore="HardcodedText" />
         </LinearLayout>
 
-        <!-- 识别引擎：ONNX 角点式（默认，泛化好）/ YOLO 检测式（回退），运行中热切换。
-             RadioButton 芯片化：button=@null + 选中态描边/文字色（chip_segment 同构） -->
+        <!-- v1.17：识别引擎固定 YOLO。ONNX 模型受版权不随包分发，选项永远加载失败，
+             故整行只读、第一项隐藏，用户不必再在「两种模式」之间来回跳。 -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -287,7 +287,7 @@
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:text="识别引擎"
+                android:text="识别引擎（固定）"
                 android:textColor="@color/xq_ink_text"
                 android:textSize="13sp"
                 tools:ignore="HardcodedText" />
@@ -303,6 +303,8 @@
                     style="@style/EngineChip"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
+                    android:visibility="gone"
+                    android:enabled="false"
                     android:text="ONNX 角点式"
                     tools:ignore="HardcodedText" />
 

@@ -10,12 +10,13 @@ class AssistConfig(context: Context) {
     private val sp = context.getSharedPreferences("assist_settings", Context.MODE_PRIVATE)
 
     /**
-     * 棋盘识别引擎："onnx"（角点检测+全盘分类，对未收录皮肤泛化好，默认）
-     * 或 "yolo"（检测式，onnx 加载失败时自动回退的目标）。
+     * v1.17：识别引擎**固定 yolo**。ONNX 角点式模型受版权不随包分发，历史配置里的
+     * "onnx" 会让每次启动白加载一次失败再回退，UI 还「选了又跳回」。这里读写双向
+     * 幂等归位：旧值/脏值/外部写入一律按 yolo 处理，老用户覆盖安装后立刻好用。
      */
     var recognizerEngine: String
-        get() = sp.getString(KEY_RECOGNIZER_ENGINE, "onnx") ?: "onnx"
-        set(value) { sp.edit().putString(KEY_RECOGNIZER_ENGINE, value).apply() }
+        get() = "yolo"
+        set(value) { sp.edit().putString(KEY_RECOGNIZER_ENGINE, "yolo").apply() }
 
     /** 最近一次识别时的帧尺寸（悬浮窗遮挡判断用：把归一化棋盘框换算回像素） */
     var frameSize: Pair<Int, Int>
