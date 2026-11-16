@@ -19,7 +19,7 @@ val gitCommitCount: Int = runCatching {
 }.getOrDefault(1)
 
 // versionName = 最近可达 cn-X.Y 标签的 git describe 结果，去掉前缀 cn-：
-// 发布提交上是 "1.17"，标签之后的开发提交是 "1.17-2-gabc1234"。v1.5 起本分支标签
+// 发布提交上是 "1.18"，标签之后的开发提交是 "1.18-2-gabc1234"。v1.5 起本分支标签
 // 改用 cn- 前缀（不再以 v 开头，避免命中上游 android.yml 的 tags: ["v*"]），
 // 故 --match "cn-*"，同时把历史 voice-1.x / v3.x 标签排除在派生之外。
 // 不手写常量——版本号只由 git 标签这一个事实源派生；无 git/无 cn- 标签回退占位串
@@ -29,7 +29,7 @@ val gitVersionName: String = runCatching {
         commandLine("git", "describe", "--tags", "--match", "cn-*")
         workingDir = rootDir
     }.standardOutput.asText.get().trim().removePrefix("cn-")
-}.getOrDefault("1.17-dev")
+}.getOrDefault("1.18-dev")
 
 // 签名密码自 local.properties（gitignored）读入：CCHES_STORE_PWD / CCHES_KEY_PWD。
 // 2026-10-28 出库改造：密码不再写死在构建脚本、密钥文件不再随 git 分发。
@@ -59,7 +59,7 @@ android {
     defaultConfig {
         // v1.4 包名固定（用户拍板）：所有版本一律 com.xqdk.chess，与 v1.3 / 上游官方
         // 保持同一应用身份。配合 CI 的 applicationId 门禁（cn-build.yml 里 aapt 校验），
-        // 任何改动该值都会让构建失败。签名自 v1.17 起由 CI 显式注入固定 release 密钥
+        // 任何改动该值都会让构建失败。签名自 v1.18 起由 CI 显式注入固定 release 密钥
         // 并用证书指纹硬门禁保证（v1.14 及以前实际每次换钥匙，必须卸载重装，已实测确认）。
         val FIXED_APPLICATION_ID = "com.xqdk.chess"
         applicationId = FIXED_APPLICATION_ID

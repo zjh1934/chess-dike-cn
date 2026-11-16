@@ -111,6 +111,9 @@ class ScreenAssistService : Service() {
     private const val TAP_CAPTURE_RETRY_MAX = 3
     /** 重试总窗口：3 帧 × YOLO 约 130ms ≈ 400ms，留余量到 700ms；超时不再重试。 */
     private const val TAP_CAPTURE_RETRY_WINDOW_MS = 700L
+    /** v1.18 硬预算：点下去到「必须有声音」的上限。用户原话「最多两三秒就要给我出声音」。
+     *  正常路径（单帧裁剪后直出）约 0.3~0.6s；这个只兜极少数异常，绝不静默。 */
+    private const val TAP_HARD_SPEAK_MS = 2500L
     /** v1.12：确认后「等引擎定着」的预算，**从建局完成起算**。到点没稳就用当前最佳着
      *  念一次并收场，绝不空手 —— v1.11 的 5/20「有时不读」就是预算被多帧确认吃光。 */
     private const val TAP_SETTLE_TIMEOUT_MS = 8_000L
@@ -285,8 +288,13 @@ class ScreenAssistService : Service() {
     private var tapCaptureSeq = 0
     /** v1.16：本轮点按已试到第几帧（1 起）；失败且未超上限就立刻再抓一帧。 */
     private var tapCaptureAttempt = 0
-    /** v1.17：本轮第一帧合法但还没等到「连续两帧一致」的局面（防误检/过渡帧瞎指挥）。 */
+    /** v1.18：本轮最近一帧合法局面，仅供 2.5s 硬预算兜底救场（正常路径不用）。 */
     private var tapPendingLegal: RecognitionResult? = null
+    /** v1.18：点下去的时刻，用于点按小票「点击→播报」总耗时。 */
+    @Volatile private var tapHardDeadline = 0L
+    private val tapHardSpeak = Runnable { onTapHardSpeakTimeout() }
+    /** 同一轮里「没看清」提示只念一次，避免重试连念扰民 */
+    private var tapNoticeSpoken = false
     /** v1.16：第一条建议（箭头出现）时刻，用于日志「箭头→播报」耗时。 */
     private var tapSuggestShownTs = 0L
     /** v1.16：本轮念过的那招，锁定面板文案/箭头，避免「念的」和「画的」不一致。 */
@@ -1807,7 +1815,17 @@ class ScreenAssistService : Service() {
         tapSessionConfirmed = false
         tapSessionAwaitSettle = false
         tapSessionSpoke = false
+        tapNoticeSpoken = false
+        tapHardDeadline = System.currentTimeMillis() + TAP_HARD_SPEAK_MS
         lastFrameDropReason = null
+        // v1.18 治「还在上一步」：点击瞬间先清掉上一轮的建议/箭头/引擎结果。
+        // 03:00 诊断里 19 次点按有 18 次「④ 箭头已画出」出现在点击后 2~7ms、
+        // 比识别还早 —— 那是 renderOverlay 拿旧 lastAnalysis 重画出来的上一步箭头，
+        // 用户看着就像「点了他没去读屏幕，还停在上一手」。清干净再抓帧。
+        resetSuggestionState()
+        // v1.18 硬预算：到点必有声音，绝不静默收场
+        workerHandler.removeCallbacks(tapHardSpeak)
+        workerHandler.postDelayed(tapHardSpeak, TAP_HARD_SPEAK_MS)
         // v1.14：点棋盘＝**立刻抓一帧当前屏幕**。不再拿点击前缓存帧、不再受
         // 帧节流 / 节拍器 / 帧差阈值支配（用户实测「对方已走，点了却没读到屏幕」）。
         cancelTapCapture()
@@ -1830,8 +1848,9 @@ class ScreenAssistService : Service() {
         tapLockedArrowTo = null
         VoiceDiag.log(this, "点按出招", "抓帧会话启动 seq=$seq " +
             "点下去立即读取当前屏幕（不查节拍器/不等帧差）已有局面=$tapSessionHadBoard 引擎=$engineName")
-        logTapChain("① 点棋盘触发", "手势→立即抓取当前屏幕这一帧 seq=$seq（不合法就再抓一帧，不叫用户重点）")
+        logTapChain("① 点棋盘触发", "手势→立即抓取当前屏幕这一帧 seq=$seq（旧建议已擦除；数量误检就地修，不叫用户重点）")
         setStatus("正在读取屏幕…")
+        postRender()   // 立即把面板上的旧箭头擦掉，别让用户以为还停在上一步
         // ① 缓冲里若有现成帧，立刻取用（最快路径，同步识别）
         if (!captureBufferedFrame(seq)) {
             // ② 否则强制 VirtualDisplay 重提交一帧；帧回调会无条件直投识别
@@ -1918,15 +1937,13 @@ class ScreenAssistService : Service() {
             System.currentTimeMillis() - tapCaptureStartTs >= TAP_CAPTURE_RETRY_WINDOW_MS) {
             VoiceDiag.log(this, "点按抓帧",
                 "seq=$seq 抓帧窗口用尽 → 明确收场（不再重复用同一帧，也不静默等待）")
-            setStatus("画面没认稳\n再点一次棋盘")
-            endTapSession("抓帧窗口用尽")
+            endTapSessionWithVoice("画面没认稳\n再点一次棋盘", "抓帧窗口用尽")
             return
         }
         val f = lastFrame?.let { Frame(it.width, it.height, it.argb.copyOf()) }
         if (f == null) {
             VoiceDiag.log(this, "点按抓帧", "seq=$seq 兜底失败：没有任何屏幕帧")
-            setStatus("画面还没准备好\n再点一次棋盘")
-            endTapSession("无可用帧")
+            endTapSessionWithVoice("画面还没准备好\n再点一次棋盘", "无可用帧")
             return
         }
         val attempt = tapCaptureAttempt
@@ -1958,6 +1975,7 @@ class ScreenAssistService : Service() {
         val engine = engineName
         var result: RecognitionResult? = null
         var fail = "—"
+        var trimInfo = "—"
         if (engine == ENGINE_ONNX) {
             val eng = onnxEngine
             if (eng == null || !eng.loaded) fail = "ONNX 未就绪"
@@ -1982,6 +2000,13 @@ class ScreenAssistService : Service() {
                 if (mapped == null || mapped.grid == null) fail = "这一帧没找到棋盘"
                 else {
                     sessionGrid = mapped.grid
+                    trimInfo = if (mapped.trimmed > 0)
+                        "裁掉${mapped.trimmed}个误检子（${mapped.trimDetail}）" else "无需裁剪"
+                    if (mapped.trimmed > 0) {
+                        VoiceDiag.log(this, "数量规范化",
+                            "seq=$seq 第${attempt}帧 YOLO 多认 → ${mapped.trimDetail} " +
+                            "按置信度丢最低者，局面就地修好，不再整局判死")
+                    }
                     result = RecognitionResult(mapped.canonical, mapped.screenRaw, mapped.orientation,
                         AssistBoard.validate(mapped.canonical), 0, mapped.pieceCount, mapped.avgScore)
                 }
@@ -1994,39 +2019,25 @@ class ScreenAssistService : Service() {
         VoiceDiag.log(this, "识别结果", "seq=$seq 第${attempt}帧 帧来源=$source 引擎=$engine 耗时=${cost}ms " +
             "认出=${result != null} 合法=$legal 判定=${verdict.reason} " +
             "不合法明细=${if (verdict.detail.isEmpty()) "—" else verdict.detail} " +
-            "问题数=${result?.issues?.size ?: 0} 失败=$fail")
+            "问题数=${result?.issues?.size ?: 0} 数量规范化=$trimInfo 失败=$fail")
         if (!legal) {
             val why = listOf(verdict.reason, verdict.detail, fail)
                 .filter { it.isNotBlank() && it != "—" }.joinToString(" / ")
             if (retryTapCapture(seq, attempt, why)) return
             logTapChain("② 识别失败（链路在此收场）",
-                "耗时=${cost}ms 已试 ${tapSessionRecCount} 帧，均不合法：$why → 提示再点一次，不拿错局面算")
-            setStatus("这几帧没认清棋盘\n再点一次棋盘")
-            endTapSession("未识别·不合法(已试${tapSessionRecCount}帧)")
+                "耗时=${cost}ms 已试 ${tapSessionRecCount} 帧，均不合法：$why → 语音提示，不静默")
+            endTapSessionWithVoice("这几帧没认清棋盘\n再点一次棋盘",
+                "未识别·不合法(已试${tapSessionRecCount}帧)")
             return
         }
         val r = result!!
-        val hasMore = attempt < TAP_CAPTURE_RETRY_MAX &&
-            System.currentTimeMillis() - tapCaptureStartTs < TAP_CAPTURE_RETRY_WINDOW_MS
-        val prevLegal = tapPendingLegal
-        val plausible = TapBoardStep.check(currentCanonical, r.canonical, mySideIsRed())
-        val consensus = TapFrameConsensus.decide(
-            prevLegal?.canonical, r.canonical, hasMore, plausible.plausible)
-        VoiceDiag.log(this, "点按抓帧",
-            "seq=$seq 第${attempt}帧 合法 → 一致性=${consensus.reason} " +
-            "与上一局面=${plausible.reason}")
-        if (!consensus.accept) {
-            // 两帧不一致时以新帧为准，再抓一帧确认；窗口用尽且说不通就不支招
-            tapPendingLegal = r
-            if (retryTapCapture(seq, attempt, consensus.reason)) return
-            logTapChain("② 一致性未确认（链路在此收场）",
-                "已试 ${tapSessionRecCount} 帧：${consensus.reason}；${plausible.reason} → 不拿可疑局面支招")
-            setStatus("这一帧没认稳\n再点一次棋盘")
-            endTapSession("未认稳·不支招")
-            return
-        }
-        logTapChain("② 识别完成", "第${attempt}帧 ${consensus.reason} 耗时=${cost}ms → 交给支招")
-        tapPendingLegal = null
+        tapPendingLegal = r
+        // v1.18：回到用户一直要的「这一帧直接算」。v1.17 的两帧一致 / 一步校验
+        // 在真机上被证明不适配：forceCaptureFrame 重提交的是同一静止画面，
+        // YOLO 每帧抖动出不同的错（卒6/象3/马3），日志里 18 次「与上一局面差 4 格
+        // 疑似误检」、5 次「两帧不一致」，3 帧窗口被吃光后静默收场。
+        // 质量改由映射层 PieceLimitTrim 就地保证，不再靠「等下一帧碰运气」。
+        logTapChain("② 识别完成", "第${attempt}帧 单帧合法 耗时=${cost}ms 数量规范化=$trimInfo → 交给支招")
         applyTapDirectBoard(r)
     }
 
@@ -2070,17 +2081,68 @@ class ScreenAssistService : Service() {
         setStatus("棋盘已认准\n正在算这一招…")
     }
 
+    /**
+     * v1.18：失败也要有声音。03:00 诊断 19 次点按里 11 次静默收场（只弹文字
+     * 「再点一次」），用户只能隔 1.9~2.8 秒连点碰运气。现在收场必念一句，
+     * 绝不静默；同一轮只念一次，避免 3 帧重试连念扰民。
+     */
+    private fun endTapSessionWithVoice(status: String, outcome: String) {
+        if (!tapNoticeSpoken && config.voiceEnabled) {
+            tapNoticeSpoken = true
+            VoiceDiag.log(this, "中文播报", "未出招 → 语音提示一次「没看清棋盘，再点一次」（不静默收场）")
+            // TTS 构造/朗读放主线程：本函数来自 worker 帧回调，TextToSpeech 需要主线程 Looper
+            mainHandler.post {
+                voiceSpeaker?.speakTest("没看清棋盘，再点一次", config.ttsEngine)
+            }
+        }
+        setStatus(status)
+        endTapSession(outcome)
+    }
+
+    /**
+     * v1.18 硬预算 2.5 秒：点下去到点还没播报，就强制给声音，绝不静默。
+     * 正常路径（映射层裁剪 + 单帧直出）约 0.3~0.6s 就出招，这里只兜极少数异常：
+     * - 已建局但引擎没出建议 → 强制定着，走 TapSpeakGate 念当前最佳着一次
+     * - 还没建局但有合法帧 → 立刻用它建局支招
+     * - 连帧都没有 → 语音提示「再点一次」
+     */
+    private fun onTapHardSpeakTimeout() {
+        if (!tapSessionActive || tapSessionSpoke) return
+        val elapsed = System.currentTimeMillis() - tapSessionStartTs
+        VoiceDiag.log(this, "点按出招",
+            "硬预算兜底：${elapsed}ms 仍未播报 → 强制给声音（绝不静默）")
+        when {
+            tapSessionAwaitSettle && lastAnalysis != null -> {
+                searchSettled = true
+                VoiceDiag.log(this, "点按出招", "硬预算：强制定着 → 念当前最佳着一次")
+                mainHandler.post { postRender() }
+            }
+            tapPendingLegal != null -> {
+                VoiceDiag.log(this, "点按出招", "硬预算：用最近一帧合法局面立刻建局支招")
+                applyTapDirectBoard(tapPendingLegal!!)
+                // 引擎出第一条建议就念（TapSpeakGate 仍保证本轮只念一次）
+                mainHandler.postDelayed({
+                    if (tapSessionActive && !tapSessionSpoke) { searchSettled = true; postRender() }
+                }, 400L)
+            }
+            else -> endTapSessionWithVoice("没看清棋盘\n再点一次棋盘", "硬预算·已语音提示")
+        }
+    }
+
     /** 一轮点按收场：写「点按小票」一行总账，清会话与闸口，绝不再兜底支招。 */
     private fun endTapSession(outcome: String) {
         if (!tapSessionActive) return
         val cost = if (tapSessionStartTs > 0L) System.currentTimeMillis() - tapSessionStartTs else 0L
         tapSessionActive = false
         cancelTapCapture()
+        workerHandler.removeCallbacks(tapHardSpeak)
+        tapHardDeadline = 0L
         tapSessionDeadline = 0L
         tapSessionConfirmed = false
         tapSessionAwaitSettle = false
         tapSessionSpoke = false
-        VoiceDiag.log(this, "点按小票", "seq=$tapSessionSeq 耗时=${cost}ms 结果=$outcome " +
+        VoiceDiag.log(this, "点按小票", "seq=$tapSessionSeq 耗时=${cost}ms " +
+            "点击→播报=${if (tapSuggestShownTs > 0L) tapSuggestShownTs - tapSessionStartTs else cost}ms 结果=$outcome " +
             "识别次数=$tapSessionRecCount 拦下次数=$tapSessionDropCount " +
             "已有局面=$tapSessionHadBoard 引擎=$engineName " +
             "我方=${if (mySideIsRed()) "红" else "黑"} 该谁走=${if (tracker.redGo) "红" else "黑"} " +
@@ -2544,9 +2606,11 @@ class ScreenAssistService : Service() {
         }
 
         // v1.16：第一条建议出现（箭头画出来）就记时刻，供日志核对「算出来→念出来」的延迟。
-        if (arrowFrom != null && tapSuggestShownTs == 0L && tapSessionActive) {
+        // v1.18：必须是**本轮已建局**之后画出的箭头才算「本次首着」。
+        // 以前只判 tapSessionActive，点击瞬间残留的旧箭头会被误记（19 次里 18 次）。
+        if (arrowFrom != null && tapSuggestShownTs == 0L && tapSessionActive && tapSessionAwaitSettle) {
             tapSuggestShownTs = System.currentTimeMillis()
-            VoiceDiag.log(this, "点按链路", "④ 箭头已画出（第一条建议）→ 立刻进入播报，不等定着 1.2s")
+            VoiceDiag.log(this, "点按链路", "④ 箭头已画出（本轮第一条建议）→ 立刻进入播报，不等定着 1.2s")
         }
         // 本轮已念过并收场：把面板锁在「念过的那招」，引擎后续更优 PV 不再覆盖画面，
         // 杜绝「念的是 A、箭头却变成 B」。下一次点棋盘时清空。
@@ -2697,6 +2761,8 @@ class ScreenAssistService : Service() {
         VoiceDiag.log(this, "识别闸口", "录屏释放：关闸口（会话=$tapSessionActive 自动=$autoRecognize）")
         tapSessionActive = false
         cancelTapCapture()
+        workerHandler.removeCallbacks(tapHardSpeak)
+        tapHardDeadline = 0L
         tapSessionDeadline = 0L
         autoRecognize = false
         workerHandler.removeCallbacks(frameTick)

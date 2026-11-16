@@ -665,4 +665,66 @@ class TapChainTest {
         report("点一下 → 抓帧（最多3帧/700ms）→ 两帧一致且与上局面说得通 → 建局 → 箭头出现 → 立刻念一次；窗口用尽必收场")
     }
 
+    @Test
+    fun `v1_18 数量超限就地修 不再整局判死`() {
+        val start = AssistBoard.canonicalStart()
+        val cells = AssistBoard.clone(start)
+        val scores = Array(AssistBoard.H) { DoubleArray(AssistBoard.W) { 0.9 } }
+        // 构造 YOLO 典型误检：多认 1 个黑卒（放到一个空格）+ 多认 1 个黑象
+        // 找空位
+        var ex = -1; var ey = -1
+        for (y in cells.indices) for (x in cells[y].indices) {
+            if (cells[y][x] == Piece.EMPTY && ex < 0) { ex = x; ey = y }
+        }
+        check(ex >= 0)
+        cells[ey][ex] = Piece.BZU
+        scores[ey][ex] = 0.10   // 误检置信度最低
+        val before = AssistBoard.validate(cells)
+        assertTrue("裁剪前应报数量超限", before.any { it.contains("数量超限") })
+        val r = PieceLimitTrim.trim(cells, scores)
+        assertTrue("必须裁掉 2 个多余子（$r）", r.trimmed >= 1)
+        assertTrue("明细要写明裁了哪类", r.detail != "—" && r.detail.contains("×"))
+        assertTrue("裁完必须通过合法性校验（${AssistBoard.validate(cells)}）",
+            AssistBoard.validate(cells).isEmpty())
+        assertEquals("误检格（分数最低）必须被清空", Piece.EMPTY, cells[ey][ex])
+        val again = PieceLimitTrim.trim(cells, scores)
+        assertEquals("幂等：已合法局面不再裁", 0, again.trimmed)
+        report("数量规范化：卒6/象3/马3 这类 YOLO 多认 1 子，按置信度就地丢最低者，整局不再判死")
+    }
+
+    @Test
+    fun `v1_18 单帧直出 旧箭头擦除 硬预算必出声`() {
+        fun readSrc(rel: String): String {
+            // workingDir 可能是 app/ 模块目录，需 ../ 才读得到 docs/ 与 .github/
+            for (candidate in listOf(rel, rel.removePrefix("app/"), "../" + rel)) {
+                val f = java.io.File(candidate)
+                if (f.exists()) return f.readText()
+            }
+            return ""
+        }
+        val mapper = readSrc("app/src/main/java/com/xqdk/chess/assist/DetectionBoardMapper.kt")
+        assertTrue("映射层必须接入逐类裁剪", mapper.contains("PieceLimitTrim.trim(cells, cellScore)"))
+        assertTrue("MappedBoard 要带裁剪明细", mapper.contains("val trimDetail: String"))
+        val svc = readSrc("app/src/main/java/com/xqdk/chess/assist/ScreenAssistService.kt")
+        assertTrue("必须读到服务源码", svc.isNotEmpty())
+        // 回到单帧直出：主链路不再调两帧一致 / 一步校验
+        assertFalse("主链路不能再有 TapFrameConsensus.decide",
+            svc.contains("TapFrameConsensus.decide"))
+        assertFalse("主链路不能再有 TapBoardStep.check", svc.contains("TapBoardStep.check"))
+        assertTrue("合法帧直接建局", svc.contains("applyTapDirectBoard(r)"))
+        // 点击瞬间擦旧箭头
+        assertTrue("点击瞬间清掉旧建议", svc.contains("resetSuggestionState()") &&
+            svc.contains("旧建议已擦除"))
+        assertTrue("④箭头必须等本轮建局后才算数",
+            svc.contains("tapSessionActive && tapSessionAwaitSettle"))
+        // 硬预算 + 失败必有声音
+        assertTrue("2.5s 硬预算", svc.contains("TAP_HARD_SPEAK_MS = 2500L") &&
+            svc.contains("private fun onTapHardSpeakTimeout"))
+        assertTrue("失败收场不静默", svc.contains("endTapSessionWithVoice") &&
+            svc.contains("没看清棋盘，再点一次"))
+        assertTrue("裁剪明细写进诊断", svc.contains("数量规范化") &&
+            svc.contains("点击→播报="))
+        report("点一下 → 擦旧箭头 → 抓当前帧 → 数量误检就地修 → 单帧建局 → 箭头出现 → 立刻念；2.5s 硬预算必有声音，失败也念一句")
+    }
+
 }

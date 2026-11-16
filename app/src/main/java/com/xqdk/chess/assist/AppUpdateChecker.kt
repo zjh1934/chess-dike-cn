@@ -43,7 +43,7 @@ sealed class UpdateResult {
     /** 已是最新（或列表里没有比构建日期更新的正式版） */
     object UpToDate : UpdateResult()
 
-    /** 发现新版本：tag = cn-1.17（本分支现行）/ cn-1.7、voice-1.4（本分支历史）/
+    /** 发现新版本：tag = cn-1.18（本分支现行）/ cn-1.7、voice-1.4（本分支历史）/
      *  v3.2（上游制式）/ stable-20261030（上游旧制），date = 8 位日期 */
     data class Newer(val tag: String, val date: String) : UpdateResult()
 
