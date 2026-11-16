@@ -1276,7 +1276,7 @@ class ScreenAssistService : Service() {
      *
      * 用户实测「有两种模式，第二种可以用，第一种不能用，选第一种自动跳到第二种」：
      * 第一种是 ONNX 角点式（配置默认 onnx），但 ONNX 模型受版权不随包分发
-     * （assets/models/*.onnx 被 .gitignore 排除），每次启动都 0ms 加载失败 → 回退 YOLO；
+     * （assets/models 目录下的 onnx 模型被 .gitignore 排除），每次启动都 0ms 加载失败 → 回退 YOLO；
      * 连线页 onResume 又按运行态回填 RadioGroup，于是选了 ONNX 又跳回 YOLO。
      * 更糟：悬浮面板「引擎」芯片一点就 `switchEngine(onnx)`，期间 tracker 被 reset、
      * sessionGrid 清空、onnxEngine 为 null —— 紧接着点棋盘必然识别失败，表现就是
