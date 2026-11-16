@@ -59,7 +59,7 @@ object VoiceDiag {
 
     /** 增强功能诊断模块稳定版本标识（我们自己的版本，不受 git describe 派生干扰）。
      *  常量名沿用 v1.2 的 VOICE_MODULE_VERSION 以兼容既有单测与导出文档字段。 */
-    const val VOICE_MODULE_VERSION = "1.18"
+    const val VOICE_MODULE_VERSION = "1.19"
 
     /** 最近一次 [export] 导出文件路径（成功为可展示路径；失败/未导出为 null） */
     @Volatile
