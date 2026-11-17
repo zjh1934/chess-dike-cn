@@ -703,7 +703,7 @@ class TapChainTest {
             return ""
         }
         val mapper = readSrc("app/src/main/java/com/xqdk/chess/assist/DetectionBoardMapper.kt")
-        assertTrue("映射层必须接入逐类裁剪", mapper.contains("PieceLimitTrim.trim(cells, cellScore)"))
+        assertTrue("映射层必须接入逐类裁剪", mapper.contains("PieceLimitTrim.trim(cells, cellScore"))
         assertTrue("MappedBoard 要带裁剪明细", mapper.contains("val trimDetail: String"))
         val svc = readSrc("app/src/main/java/com/xqdk/chess/assist/ScreenAssistService.kt")
         assertTrue("必须读到服务源码", svc.isNotEmpty())
@@ -823,7 +823,9 @@ class TapChainTest {
         assertNotEquals("真卒必须保住", Piece.EMPTY, b[trueY][trueX])
         assertEquals("背景误检必须被丢", Piece.EMPTY, b[fakeY][fakeX])
         assertTrue("延续性保住数要上报", r.protectedByContinuity >= 1)
-        assertTrue("裁完仍合法", AssistBoard.validate(b).isEmpty())
+        // 手工局面只摆了卒（没有帅将），不能套 validate；直接数黑卒数量
+        val left = b.sumOf { row -> row.count { it == Piece.BZU } }
+        assertEquals("裁完黑卒应回到上限 5", 5, left)
         // canonical <-> screenRaw 互逆（两种朝向）
         for (o in Orientation.values()) {
             val src = Array(AssistBoard.H) { y -> IntArray(AssistBoard.W) { x ->
@@ -859,7 +861,7 @@ class TapChainTest {
         val det = readSrc("app/src/main/java/com/xqdk/chess/assist/YoloBoardDetector.kt")
         assertTrue("检测层透传上一局面", det.contains("prevCanonical = prevCanonical"))
         val mp = readSrc("app/src/main/java/com/xqdk/chess/assist/DetectionBoardMapper.kt")
-        assertTrue("映射层做延续性裁剪", mp.contains("fromCanonical(it, orientation)") &&
+        assertTrue("映射层做延续性裁剪", mp.contains("fromCanonical(it, roughOrientation)") &&
             mp.contains("PieceLimitTrim.trim(cells, cellScore, prevRaw)"))
         assertTrue("服务层把上一局面带进映射", svc.contains("yolo.detect(frame, cropHint(frame), currentCanonical)"))
         report("点一下 → 抓帧（延续性裁剪）→ 建局 → 等定着/较深PV → 念一次；局面未变重念上一招；日志写明招法来源")
