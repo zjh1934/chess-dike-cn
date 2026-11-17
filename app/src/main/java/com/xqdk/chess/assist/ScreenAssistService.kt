@@ -2055,7 +2055,31 @@ class ScreenAssistService : Service() {
                 "未识别·不合法(已试${tapSessionRecCount}帧)")
             return
         }
-        val r = result!!
+        val raw = result!!
+        // v1.23：合法性门槛只查「数量超限」，漏认一个车（车 2→1）或红车认成
+        // 红卒照样合法，单帧直出会直接按残缺棋盘算招 —— 这就是「瞎指挥」。
+        // 拿上一次确认的局面当锚，把这一帧里孤立漏检 / 同阵营类别混淆就地补回，
+        // 不重抓帧、不跨帧比对（v1.21 重提交画面自己造抖动的教训）。
+        val fix = BoardRepair.repair(currentCanonical, raw.canonical)
+        VoiceDiag.log(this, "识别修补",
+            "seq=$seq 上一局面=${if (currentCanonical != null) "有" else "无"} " +
+            "修补=${fix.fixed}格 明细=${fix.detail} " +
+            "可疑=${fix.suspect}${if (fix.reason.isNotEmpty()) " 原因=${fix.reason}" else ""} → " +
+            if (fix.suspect) "不建局不支招" else "按修好的局面建局")
+        if (fix.suspect) {
+            logTapChain("② 识别可疑（链路在此收场）",
+                "单帧缺子/类别错且修不好：${fix.reason} → 宁可不出招，绝不按错局面瞎指挥")
+            endTapSessionWithVoice("这帧没认全\n再点一次棋盘", "识别可疑·未支招",
+                "这帧有个子没认准，没敢给你出招，再点一次")
+            return
+        }
+        val r = if (fix.fixed > 0) {
+            val repairedScreeenRaw = DetectionBoardMapper.fromCanonical(fix.canonical, raw.orientation)
+            var pieces = 0
+            for (row in fix.canonical) for (v in row) if (v != Piece.EMPTY) pieces++
+            RecognitionResult(fix.canonical, repairedScreeenRaw, raw.orientation,
+                AssistBoard.validate(fix.canonical), raw.unknownCells, pieces, raw.avgScore)
+        } else raw
         tapPendingLegal = r
         // v1.22：点按档**单帧直出** —— 点下去那一帧就是用户要算的那一帧。
         // 「认准」放在这一帧内部（合法性门槛 + 数量规范化 + 延续性保真子 +
@@ -2071,7 +2095,8 @@ class ScreenAssistService : Service() {
             "seq=$seq 第${attempt}帧 点按档单帧直出：原作者 confirmCount=${TapConfirm3.REQUIRED} " +
             "用于常开档；点一下棋盘不动，按这一帧建局（不反复重提交画面制造抖动）")
         logTapChain("② 识别完成",
-            "第${attempt}帧 耗时=${cost}ms 单帧合法 数量规范化=$trimInfo → 直接建局（不跨帧比对）")
+            "第${attempt}帧 耗时=${cost}ms 单帧合法 数量规范化=$trimInfo " +
+            "识别修补=${fix.fixed}格(${fix.detail}) → 直接建局（不跨帧比对）")
         applyTapDirectBoard(r)
     }
 
@@ -2141,15 +2166,16 @@ class ScreenAssistService : Service() {
      * 「再点一次」），用户只能隔 1.9~2.8 秒连点碰运气。现在收场必念一句，
      * 绝不静默；同一轮只念一次，避免 3 帧重试连念扰民。
      */
-    private fun endTapSessionWithVoice(status: String, outcome: String) {
+    private fun endTapSessionWithVoice(status: String, outcome: String,
+                                       notice: String = "没看清棋盘，再点一次") {
         if (!tapNoticeSpoken && config.voiceEnabled) {
             tapNoticeSpoken = true
-            VoiceDiag.log(this, "中文播报", "未出招 → 语音提示一次「没看清棋盘，再点一次」（不静默收场）")
+            VoiceDiag.log(this, "中文播报", "未出招 → 语音提示一次「$notice」（不静默收场）")
             // TTS 构造/朗读放主线程：本函数来自 worker 帧回调，TextToSpeech 需要主线程 Looper
             mainHandler.post {
                 // v1.19：speakTest 会 shutdown 共享实例；改用 speakNotice（不置 testMode）
                 (voiceSpeaker ?: VoiceSpeaker(this@ScreenAssistService).also { voiceSpeaker = it })
-                    .speakNotice("没看清棋盘，再点一次", config.ttsEngine)
+                    .speakNotice(notice, config.ttsEngine)
             }
         }
         setStatus(status)
