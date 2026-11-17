@@ -12,7 +12,7 @@ import kotlin.math.sqrt
  * 2. board 缺失或形状异常时，用棋子中心点包围盒兜底（需有足够棋子且间距一致）；
  * 3. 棋子中心 round 到最近交点，越界丢弃，同格冲突保留高分者；
  * 4. 朝向由两个王的位置推断（帅在下=STANDARD）；
- * 5. v1.18：逐类棋子数量上限裁剪（按 cellScore 丢置信度最低的多余者），
+ * 5. v1.18/v1.20：逐类棋子数量上限裁剪（置信度 + 上一局面延续性加成），
  *    根治「卒数量超限:6 / 象数量超限:3」把整局判死、用户连点好几次的问题。
  */
 object DetectionBoardMapper {
@@ -33,6 +33,8 @@ object DetectionBoardMapper {
         val trimmed: Int = 0,
         /** v1.18：裁剪中文明细，供诊断日志；无裁剪为「—」 */
         val trimDetail: String = "—",
+        /** v1.20：因「上一帧同格同子」被优先保住的真棋子数 */
+        val protectedByContinuity: Int = 0,
     )
 
     /**
@@ -40,7 +42,12 @@ object DetectionBoardMapper {
      * （帅仕 vs 将），故不能沿用 10——那会把稀疏残局永远拒之门外；
      * 结构合法性由 AssistBoard.validate、瞬时坏帧由 BoardTracker 的多帧确认把关。
      */
-    fun map(dets: List<YoloDetection>, frameW: Int, frameH: Int, minPieces: Int = 3): MappedBoard? {
+    fun map(
+        dets: List<YoloDetection>, frameW: Int, frameH: Int,
+        minPieces: Int = 3,
+        /** v1.20：上一帧的 canonical 局面，用于裁剪时保住真棋子；null = 退化为纯置信度 */
+        prevCanonical: Array<IntArray>? = null,
+    ): MappedBoard? {
         val pieces = dets.filter { !it.isBoard }
         if (pieces.size < minPieces) return null
 
@@ -99,9 +106,12 @@ object DetectionBoardMapper {
             cellScore[row][col] = p.score
             scoreSum += p.score
         }
-        // v1.18：逐类数量上限裁剪 —— YOLO 多认 1 个卒/象时按置信度丢掉最低的，
-        // 而不是把整局判死让用户连点。放在 canonical 转换之前，两种朝向都受益。
-        val trim = PieceLimitTrim.trim(cells, cellScore)
+        // v1.18：逐类数量上限裁剪 —— YOLO 多认 1 个卒/象时就地修好，
+        // 而不是把整局判死让用户连点。v1.20：传入上一局面做延续性加成，
+        // 优先丢背景误检、保住真棋子（避免按缺子局面算出一堆馊主意）。
+        // 放在 canonical 转换之前，先把 prevCanonical 还原成屏幕布局坐标系。
+        val prevRaw = prevCanonical?.let { fromCanonical(it, orientation) }
+        val trim = PieceLimitTrim.trim(cells, cellScore, prevRaw)
         // 裁剪后重算（O(90)，可忽略）：pieceCount / 平均分都要反映真实留下的棋子
         val pieceCount = cells.sumOf { row -> row.count { it != Piece.EMPTY } }
         val scoreSumAfter = cellScore.sumOf { row -> row.sum() }
@@ -118,7 +128,7 @@ object DetectionBoardMapper {
 
         return MappedBoard(cells, canonical, orientation, grid, pieceCount,
             if (pieceCount > 0) scoreSumAfter / pieceCount else 0.0,
-            dropped, trim.trimmed, trim.detail)
+            dropped, trim.trimmed, trim.detail, trim.protectedByContinuity)
     }
 
     /**
@@ -163,6 +173,20 @@ object DetectionBoardMapper {
         val out = Array(AssistBoard.H) { IntArray(AssistBoard.W) }
         for (gy in 0 until AssistBoard.H) for (gx in 0 until AssistBoard.W) {
             val p = raw[gy][gx]
+            if (p == Piece.EMPTY) continue
+            when (orientation) {
+                Orientation.STANDARD -> out[gy][gx] = p
+                Orientation.FLIPPED -> out[AssistBoard.H - 1 - gy][AssistBoard.W - 1 - gx] = p
+            }
+        }
+        return out
+    }
+
+    /** v1.20：canonical -> 屏幕 raw 布局（toCanonical 的逆），供延续性裁剪对齐坐标系。 */
+    fun fromCanonical(canonical: Array<IntArray>, orientation: Orientation): Array<IntArray> {
+        val out = Array(AssistBoard.H) { IntArray(AssistBoard.W) }
+        for (gy in 0 until AssistBoard.H) for (gx in 0 until AssistBoard.W) {
+            val p = canonical[gy][gx]
             if (p == Piece.EMPTY) continue
             when (orientation) {
                 Orientation.STANDARD -> out[gy][gx] = p

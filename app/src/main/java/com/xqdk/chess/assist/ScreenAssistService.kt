@@ -114,6 +114,10 @@ class ScreenAssistService : Service() {
     /** v1.18 硬预算：点下去到「必须有声音」的上限。用户原话「最多两三秒就要给我出声音」。
      *  正常路径（单帧裁剪后直出）约 0.3~0.6s；这个只兜极少数异常，绝不静默。 */
     private const val TAP_HARD_SPEAK_MS = 2500L
+    /** v1.20 短质量窗口：从建局起等这么久，让引擎 PV 从 depth 1~4 爬深再念。
+     *  07:58 诊断 28/28 念的都是「（暂定）」浅算着法 —— 这是「馊主意」的主因。
+     *  定着/开局库/预判命中不用等；窗口到点深度仍不足就继续等，2.5s 硬预算兜底。 */
+    private const val TAP_QUALITY_WINDOW_MS = 1000L
     /** v1.12：确认后「等引擎定着」的预算，**从建局完成起算**。到点没稳就用当前最佳着
      *  念一次并收场，绝不空手 —— v1.11 的 5/20「有时不读」就是预算被多帧确认吃光。 */
     private const val TAP_SETTLE_TIMEOUT_MS = 8_000L
@@ -295,6 +299,15 @@ class ScreenAssistService : Service() {
     private val tapHardSpeak = Runnable { onTapHardSpeakTimeout() }
     /** 同一轮里「没看清」提示只念一次，避免重试连念扰民 */
     private var tapNoticeSpoken = false
+    /** v1.20：本轮建局时刻，用于「等招算稳」耗时与质量判定 */
+    @Volatile private var tapBoardTs = 0L
+    /** v1.20：窗口到点强制重渲染一次，避免引擎没新 info 时一直不判定 */
+    private val tapQualityTick = Runnable {
+        if (tapSessionActive && !tapSessionSpoke) mainHandler.post { postRender() }
+    }
+    /** v1.20：上一次点按的局面与念过的纯中文着法；局面未变时重念，不重新浅算 */
+    @Volatile private var lastTapFen: String? = null
+    @Volatile private var lastTapSpoken: String? = null
     /** v1.16：第一条建议（箭头出现）时刻，用于日志「箭头→播报」耗时。 */
     private var tapSuggestShownTs = 0L
     /** v1.16：本轮念过的那招，锁定面板文案/箭头，避免「念的」和「画的」不一致。 */
@@ -1996,16 +2009,20 @@ class ScreenAssistService : Service() {
             val yolo = yoloDetector
             if (yolo == null) fail = "YOLO 未就绪"
             else {
-                val mapped = try { yolo.detect(frame, cropHint(frame)) } catch (t: Throwable) { null }
+                // v1.20：把上一局面带进映射层，裁剪时优先保住上一帧就在的真棋子
+                val mapped = try { yolo.detect(frame, cropHint(frame), currentCanonical) } catch (t: Throwable) { null }
                 if (mapped == null || mapped.grid == null) fail = "这一帧没找到棋盘"
                 else {
                     sessionGrid = mapped.grid
                     trimInfo = if (mapped.trimmed > 0)
-                        "裁掉${mapped.trimmed}个误检子（${mapped.trimDetail}）" else "无需裁剪"
+                        "裁掉${mapped.trimmed}个误检子（${mapped.trimDetail}）" +
+                        (if (mapped.protectedByContinuity > 0)
+                            "·延续性保住${mapped.protectedByContinuity}个真子" else "") else "无需裁剪"
                     if (mapped.trimmed > 0) {
                         VoiceDiag.log(this, "数量规范化",
                             "seq=$seq 第${attempt}帧 YOLO 多认 → ${mapped.trimDetail} " +
-                            "按置信度丢最低者，局面就地修好，不再整局判死")
+                            "按置信度+上一局面延续性丢误检子（保住${mapped.protectedByContinuity}个真子），" +
+                            "局面就地修好，不再整局判死")
                     }
                     result = RecognitionResult(mapped.canonical, mapped.screenRaw, mapped.orientation,
                         AssistBoard.validate(mapped.canonical), 0, mapped.pieceCount, mapped.avgScore)
@@ -2052,6 +2069,23 @@ class ScreenAssistService : Service() {
         val redIsBottom = result.orientation == Orientation.STANDARD
         val myRed = UserSideChoice.effective(mySideOverrideRed, redIsBottom,
             isNewGame, mySideLockedRed)
+        // v1.20：棋盘没变（常见于又点了一下、或漏检了新落子）→ 重念上一招，
+        // 不重新发起一次浅搜索。07:58 日志里 seq=115/116 隔 8 秒两次都是「炮1退1」，
+        // 还会让引擎按「我方又走一步」算，招法自然越支越离谱。
+        val newFen = AssistBoard.toFen(result.canonical, myRed)
+        if (newFen == lastTapFen && lastTapSpoken != null) {
+            val again = lastTapSpoken!!
+            VoiceDiag.log(this, "重复点按",
+                "seq=$tapSessionSeq 局面与上一轮完全相同 → 重念上一招「$again」，不重新搜索（避免重复馊主意/轮次错乱）")
+            logTapChain("③ 局面未变", "与上一轮同一局面 → 重念已算稳的那一招，不再浅算一遍")
+            mainHandler.post {
+                (voiceSpeaker ?: VoiceSpeaker(this@ScreenAssistService).also { voiceSpeaker = it })
+                    .speakNotice(again, config.ttsEngine)
+            }
+            setStatus("已出招 · 待点棋盘")
+            endTapSession("重复点按·重念上一招")
+            return
+        }
         mySideLockedRed = myRed
         // 点棋盘＝「给我支招」：按我方回合请求，配合 fromIsOurs 双保险，
         // 绝不指挥用户去动对方棋子，也不会判成「轮到对方→不出招」。
@@ -2060,8 +2094,12 @@ class ScreenAssistService : Service() {
         currentCanonical = AssistBoard.clone(result.canonical)
         currentPieces = flatten(result.canonical)
         currentOrientation = result.orientation
-        currentFen = AssistBoard.toFen(result.canonical, myRed)
+        currentFen = newFen
         resetSuggestionState()
+        // v1.20：质量窗口从「建局完成」起算；到点强制重渲染一次做质量判定
+        tapBoardTs = System.currentTimeMillis()
+        workerHandler.removeCallbacks(tapQualityTick)
+        workerHandler.postDelayed(tapQualityTick, TAP_QUALITY_WINDOW_MS)
         history.addLast(HistoryEntry(result, myRed, currentFen))
         if (history.size > 60) history.removeFirst()
 
@@ -2075,7 +2113,7 @@ class ScreenAssistService : Service() {
         VoiceDiag.log(this, "敌我判定",
             "我方=${if (myRed) "红" else "黑"} 来源=$sideSource 按我方回合请求 " +
             if (isNewGame || prev == null) "首次/新对局重定" else "沿用锁定")
-        logTapChain("③ 局面重建", "已按这一帧建局 → 我方=${if (myRed) "红" else "黑"}（$sideSource）→ 发起一次支招")
+        logTapChain("③ 局面重建", "已按这一帧建局 → 我方=${if (myRed) "红" else "黑"}（$sideSource）→ 发起一次支招（等招算稳再念，不再念最浅那条）")
         postRender()
         scheduleAnalysis()
         setStatus("棋盘已认准\n正在算这一招…")
@@ -2129,10 +2167,18 @@ class ScreenAssistService : Service() {
                 }
                 endTapSession("硬预算·已重建补念")
             }
-            tapSessionAwaitSettle && lastAnalysis != null -> {
+            tapSessionAwaitSettle -> {
+                // v1.20：质量窗口内没等到定着/深 PV，到点就用当前最佳着念一次；
+                // 绝不因为「还不够深」而让用户干等，也绝不静默。
                 searchSettled = true
-                VoiceDiag.log(this, "点按出招", "硬预算：强制定着 → 念当前最佳着一次")
+                VoiceDiag.log(this, "点按出招",
+                    "硬预算：${elapsed}ms 未等到定着 → 强制定着，用当前最佳着念一次（招法质量行会写明来源）")
                 mainHandler.post { postRender() }
+                mainHandler.postDelayed({
+                    if (tapSessionActive && !tapSessionSpoke) {
+                        endTapSessionWithVoice("这一手没算稳\n再点一次棋盘", "硬预算·已语音提示")
+                    }
+                }, 250L)
             }
             tapPendingLegal != null -> {
                 VoiceDiag.log(this, "点按出招", "硬预算：用最近一帧合法局面立刻建局支招")
@@ -2153,6 +2199,7 @@ class ScreenAssistService : Service() {
         tapSessionActive = false
         cancelTapCapture()
         workerHandler.removeCallbacks(tapHardSpeak)
+        workerHandler.removeCallbacks(tapQualityTick)
         tapHardDeadline = 0L
         tapSessionDeadline = 0L
         tapSessionConfirmed = false
@@ -2678,12 +2725,14 @@ class ScreenAssistService : Service() {
             engineText = if (engineName == ENGINE_ONNX) "ONNX" else "YOLO",
             multiPv = multiPv,
         ))
-        // v1.16 切入点：**箭头画出来的那一刻就念**，不再等 SUGGEST_STABLE_MS=1200ms
-        // 的「定着」。v1.11 把播报挂在 renderOverlay 上导致每条暂定 PV 都念，
-        // 于是加了定着门槛；但「本轮只念一次(alreadySpoke)」+「会话收场即 WAIT」
-        // 已经能挡住横跳，干等 1.2~8 秒纯属多余。用户原话：算出来就要给我读。
+        // v1.20：不再「箭头一出来就念」。07:58 诊断 28/28 念的全是「（暂定）」浅算
+        // 着法（用户原话「支的招很多馊主意」）。定着/开局库/预判立刻念；其余等短质量
+        // 窗口（1s）且 PV 深度≥8 才念；2.5s 硬预算仍保证必有声音，绝不静默。
+        val pvDepthNow = lastAnalysis?.lines?.firstOrNull()?.depth ?: 0
+        val qualityElapsed = if (tapBoardTs > 0L) System.currentTimeMillis() - tapBoardTs else 0L
         when (TapSpeakGate.decide(tapSessionAwaitSettle, tapSessionSpoke, arrowFrom != null,
-            candidateText, config.voiceEnabled)) {
+            candidateText, config.voiceEnabled, suggestMature, pvDepthNow,
+            qualityElapsed, TAP_QUALITY_WINDOW_MS)) {
             TapSpeakGate.Decision.SPEAK -> {
                 tapSessionSpoke = true
                 // v1.19：朗读器可能已 shutdown / TTS 服务掉线，先自愈再交稿。
@@ -2696,10 +2745,23 @@ class ScreenAssistService : Service() {
                 tapLockedArrowTo = arrowTo
                 val delay = if (tapSuggestShownTs > 0L)
                     System.currentTimeMillis() - tapSuggestShownTs else 0L
-                logTapChain("⑤ 语音播报", "首着即念 → 箭头出现→播报=${delay}ms " +
+                logTapChain("⑤ 语音播报", "招法算稳后念 → 箭头出现→播报=${delay}ms " +
                     "支招文案=${text.replace('\n', '／')} 总开关=${config.voiceEnabled} → 交给 TTS（**是否真出声以「朗读回执」行为准**）")
+                // v1.20：把「念的到底是什么质量的招」写清楚，以后一眼验证还在不在念浅算馊主意
+                val qualitySource = when {
+                    bookMoves != null -> "开局库着法"
+                    precomputeHit -> "预判深算"
+                    suggestMature -> "定着✓"
+                    else -> "较深PV 深${pvDepthNow}"
+                }
+                VoiceDiag.log(this, "招法质量",
+                    "seq=$tapSessionSeq 来源=$qualitySource 深度=$pvDepthNow " +
+                    "等招算稳=${qualityElapsed}ms 定着=$suggestMature 文案=${text.replace('\n', '／')}")
                 VoiceDiag.log(this, "点按抓帧",
-                    "seq=$tapSessionSeq 算出来→念出来=${delay}ms（切入点=箭头出现，未等定着 1.2s）")
+                    "seq=$tapSessionSeq 建局→念出来=${qualityElapsed}ms（v1.20 等招算稳，不再念第一条浅 PV）")
+                lastTapFen = currentFen
+                lastTapSpoken = text.replace(Regex("^\\S+\\s+"), "")
+                    .substringBefore(' ').trim().ifEmpty { "再看一眼棋盘" }
                 speaker.onSuggestion(multiPv, config.voiceEnabled, text, config.ttsEngine,
                     advantageText ?: "", config.voiceReadMask)
                 // v1.19：以前无条件写「已播报」，可系统 TTS 哑了 12 次日志还全是「已播报」。

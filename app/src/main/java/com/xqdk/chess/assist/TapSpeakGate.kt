@@ -29,12 +29,25 @@ package com.xqdk.chess.assist
  * 还互相 QUEUE_FLUSH 打断。更糟的是会话 200ms 就收场了，引擎还在搜几秒，
  * 于是下一轮点棋盘之后仍在念上一轮的残留着法（日志 17:58:30 / 17:58:52 即是）。
  *
+ * ## v1.20：招法质量门槛（用户「支的招很多馊主意」）
+ *
+ * 07:58 诊断（v1.19，28 次点按）把 v1.16 的取舍证伪了：**28/28 念的全是
+ * 「（暂定）」，0 次「定着✓」**。v1.16 为「算出来就念」把播报挂在箭头画出的
+ * 那一刻，而箭头用的是引擎**第一条 info 行**（最浅 PV，通常 depth 1~4），
+ * 搜索还没收敛就念了 —— 快是快了（平均 0.32s），但支的是浅算的馊主意。
+ *
+ * 现在回到「等招算稳」，但不退回秒级干等：
+ * - **定着 / 开局库 / 预判命中**（`mature=true`）→ 立刻念，零等待、最可信
+ * - 否则等一个**短质量窗口**（默认 1000ms），且当前 PV 深度 ≥ [MIN_PV_DEPTH]
+ *   才念 —— 这时已经是深得多的着法
+ * - 窗口内还没达标继续 WAIT；2.5s 硬预算由服务层兜底，绝不静默
+ *
+ * 用户要的「最多两三秒出声」仍然成立：定着常在 1~2 秒到；最差 2.5 秒硬预算。
+ *
  * ## 门控口径
  *
  * - 只在本轮点按会话**等待定着**期间生效；会话收场后一律 WAIT（杜绝残留播报）。
- * - **不再要求定着**：`suggestionReady`＝本轮第一条通过起点双保险的建议已可展示
- *   （调用方传 `arrowFrom != null`，即箭头画出来的那一刻）。
- * - 文案必须是建议/开局库/备选，状态文案（「引擎思考中…」）、空文本、警告文本一律不念。
+ * - 文案必须是建议/开局库/备选，状态文案、空文本、警告文本一律不念。
  * - 本轮已播过 → WAIT，保证一次点按最多一招。
  * - 播报总开关关掉 → MUTED（仍然正常收场，只显示不念）。
  */
@@ -49,17 +62,31 @@ object TapSpeakGate {
         WAIT,
     }
 
+    /** 短质量窗口内，PV 至少要爬到这个深度才值得念（第一条 info 通常 1~4 层）。 */
+    const val MIN_PV_DEPTH = 8
+    const val DEFAULT_QUALITY_WINDOW_MS = 1000L
+
     fun decide(
         tapAwaitingSettle: Boolean,
         alreadySpoke: Boolean,
         suggestionReady: Boolean,
         text: String?,
         voiceEnabled: Boolean,
+        /** 定着✓ / 开局库 / 预判β / 稳定 1200ms —— 最可信，立刻念 */
+        mature: Boolean = false,
+        /** 当前建议的引擎搜索深度 */
+        pvDepth: Int = 0,
+        /** 从本轮建局到现在过了多久 */
+        elapsedMs: Long = 0L,
+        /** 短质量窗口；到点且深度达标才念暂定 PV */
+        qualityWindowMs: Long = DEFAULT_QUALITY_WINDOW_MS,
     ): Decision {
         if (!tapAwaitingSettle || alreadySpoke) return Decision.WAIT
         if (!suggestionReady) return Decision.WAIT
         val t = text ?: return Decision.WAIT
         if (!isSuggestion(t)) return Decision.WAIT
+        val qualityOk = mature || (elapsedMs >= qualityWindowMs && pvDepth >= MIN_PV_DEPTH)
+        if (!qualityOk) return Decision.WAIT
         return if (voiceEnabled) Decision.SPEAK else Decision.MUTED
     }
 

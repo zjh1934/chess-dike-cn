@@ -284,7 +284,7 @@ class TapChainTest {
             TapSpeakGate.decide(true, false, true, "轮次可能识别有误", true))
         // 定着的建议 → 念一次
         assertEquals(TapSpeakGate.Decision.SPEAK,
-            TapSpeakGate.decide(true, false, true, "建议 炮8平7 (h7g7) ✓", true))
+            TapSpeakGate.decide(true, false, true, "建议 炮8平7 (h7g7) ✓", true, mature = true))
         // 本轮已念过 → 后面引擎 info 再怎么刷都不念
         assertEquals(TapSpeakGate.Decision.WAIT,
             TapSpeakGate.decide(true, true, true, "建议 将5退1 (e8e9)（暂定）", true))
@@ -293,7 +293,7 @@ class TapChainTest {
             TapSpeakGate.decide(false, false, true, "建议 卒9进1 (i6i5) ✓", true))
         // 总开关关掉：仍正常收场，只是不念
         assertEquals(TapSpeakGate.Decision.MUTED,
-            TapSpeakGate.decide(true, false, true, "开局库 炮二平五 ✓", false))
+            TapSpeakGate.decide(true, false, true, "开局库 炮二平五 ✓", false, mature = true))
         report("一次点按只播一招：暂定不念、状态文案不念、定着念一次、本轮已念/会话收场一律不念")
     }
 
@@ -533,10 +533,10 @@ class TapChainTest {
     }
 
     @Test
-    fun `v1_16 算出来就念 箭头画出来不再等定着`() {
-        // 用户实测：「箭头都画出来了，他还不给我读出来……算出来就要给我读啊」
-        // 之前 TapSpeakGate 要求 mature（定着 ✓ / 稳定 1200ms），播报比箭头晚 1.2~8 秒。
-        assertEquals("暂定着法（箭头已画出）也要立刻念", TapSpeakGate.Decision.SPEAK,
+    fun `v1_16 历史口径已被 v1_20 修正 不再念第一条浅 PV`() {
+        // 用户实测 v1.16：「箭头都画出来了，他还不给我读出来」→ 当时改成箭头出现即念。
+        // v1.19 真机 28/28 念的全是「（暂定）」浅算着法（「很多馊主意」），v1.20 改回等招算稳。
+        assertEquals("浅 PV 暂定着法不再立刻念", TapSpeakGate.Decision.WAIT,
             TapSpeakGate.decide(true, false, true, "建议 炮2平1 (b7a7)（暂定）", true))
         assertEquals("箭头还没画出来就不念", TapSpeakGate.Decision.WAIT,
             TapSpeakGate.decide(true, false, false, "引擎思考中…", true))
@@ -763,6 +763,106 @@ class TapChainTest {
             svc.contains("seq=\$tapSessionSeq t=") && svc.contains("\"我方选择\""))
         assertTrue("状态文案降噪", svc.contains("lastDiagStatusTs"))
         report("TTS 掉线判定看 onStart 回执而非 speak 返回值；掉线即重建补念；日志按真实回执写；切换红黑不是原因")
+    }
+
+    @Test
+    fun `v1_20 招法质量门槛 定着立刻念 浅PV要等深`() {
+        // 定着 / 开局库 / 预判 → 零等待，最可信
+        assertEquals(TapSpeakGate.Decision.SPEAK,
+            TapSpeakGate.decide(true, false, true, "建议 炮8平7 (h7g7) ✓", true,
+                mature = true, pvDepth = 3, elapsedMs = 50L, qualityWindowMs = 1000L))
+        assertEquals(TapSpeakGate.Decision.MUTED,
+            TapSpeakGate.decide(true, false, true, "开局库 炮二平五 ✓", false,
+                mature = true, pvDepth = 0, elapsedMs = 10L, qualityWindowMs = 1000L))
+        // 箭头刚画出来（第一条浅 PV）→ 不念，这是 07:58 日志 28/28「（暂定）」的病根
+        assertEquals(TapSpeakGate.Decision.WAIT,
+            TapSpeakGate.decide(true, false, true, "建议 炮2平1 (b7a7)（暂定）", true,
+                mature = false, pvDepth = 2, elapsedMs = 20L, qualityWindowMs = 1000L))
+        // 窗口内深度还浅 → 继续等
+        assertEquals(TapSpeakGate.Decision.WAIT,
+            TapSpeakGate.decide(true, false, true, "建议 炮2平1 (b7a7)（暂定）", true,
+                mature = false, pvDepth = 4, elapsedMs = 1100L, qualityWindowMs = 1000L))
+        // 窗口到点且深度爬够 → 念（仍是 2.5s 硬预算之内）
+        assertEquals(TapSpeakGate.Decision.SPEAK,
+            TapSpeakGate.decide(true, false, true, "建议 炮2平1 (b7a7)（暂定）", true,
+                mature = false, pvDepth = 12, elapsedMs = 1050L, qualityWindowMs = 1000L))
+        // 横跳防线 / 会外残留 / 状态文案仍然有效
+        assertEquals(TapSpeakGate.Decision.WAIT,
+            TapSpeakGate.decide(true, true, true, "建议 马8进9 (h9g7) ✓", true, mature = true))
+        assertEquals(TapSpeakGate.Decision.WAIT,
+            TapSpeakGate.decide(false, false, true, "建议 车二进四 (h0h4) ✓", true, mature = true))
+        assertEquals(TapSpeakGate.Decision.WAIT,
+            TapSpeakGate.decide(true, false, true, "引擎思考中…", true, mature = true))
+        report("招法质量：定着/开局库零等待；浅 PV 等 1s 且 depth≥8 才念；2.5s 硬预算兜底必有声音")
+    }
+
+    @Test
+    fun `v1_20 裁剪延续性 优先丢背景误检 保住真棋子`() {
+        // 构造 6 个黑卒（上限 5）：其中「真卒」（上一帧同格同子）分数 0.2，
+        // 「背景误检卒」（上一帧不存在）分数 0.9。纯置信度会丢错真子。
+        val cells = Array(AssistBoard.H) { IntArray(AssistBoard.W) }
+        val scores = Array(AssistBoard.H) { DoubleArray(AssistBoard.W) }
+        val spots = listOf(0 to 0, 0 to 2, 0 to 4, 0 to 6, 0 to 8, 2 to 3)
+        spots.forEach { (y, x) -> cells[y][x] = Piece.BZU; scores[y][x] = 0.9 }
+        val trueY = 0; val trueX = 0
+        scores[trueY][trueX] = 0.2          // 真卒这帧分数反而低
+        val fakeY = 2; val fakeX = 3
+        val prev = Array(AssistBoard.H) { y -> IntArray(AssistBoard.W) { x ->
+            if (y == trueY && x == trueX) Piece.BZU else Piece.EMPTY
+        } }
+        // 不带上一局面：按置信度丢最低 → 真卒被丢（复现 v1.18 的失误）
+        val a = AssistBoard.clone(cells); val sa = Array(AssistBoard.H) { DoubleArray(AssistBoard.W) }
+        for (y in 0 until AssistBoard.H) for (x in 0 until AssistBoard.W) sa[y][x] = scores[y][x]
+        PieceLimitTrim.trim(a, sa, null)
+        assertEquals("不带上一局面时会误丢真卒", Piece.EMPTY, a[trueY][trueX])
+        // 带上一局面：延续性加成保住真卒，丢掉背景误检
+        val b = AssistBoard.clone(cells); val sb = Array(AssistBoard.H) { DoubleArray(AssistBoard.W) }
+        for (y in 0 until AssistBoard.H) for (x in 0 until AssistBoard.W) sb[y][x] = scores[y][x]
+        val r = PieceLimitTrim.trim(b, sb, prev)
+        assertEquals("必须裁掉 1 个", 1, r.trimmed)
+        assertNotEquals("真卒必须保住", Piece.EMPTY, b[trueY][trueX])
+        assertEquals("背景误检必须被丢", Piece.EMPTY, b[fakeY][fakeX])
+        assertTrue("延续性保住数要上报", r.protectedByContinuity >= 1)
+        assertTrue("裁完仍合法", AssistBoard.validate(b).isEmpty())
+        // canonical <-> screenRaw 互逆（两种朝向）
+        for (o in Orientation.values()) {
+            val src = Array(AssistBoard.H) { y -> IntArray(AssistBoard.W) { x ->
+                if ((x + y) % 3 == 0) Piece.WMA else Piece.EMPTY } }
+            val back = DetectionBoardMapper.fromCanonical(
+                DetectionBoardMapper.toCanonical(src, o), o)
+            assertTrue("朝向 $o 下坐标必须还原", AssistBoard.equal(src, back))
+        }
+        report("裁剪延续性：上一帧同格同子优先保住，10/28 帧的裁剪不再按缺子局面算馊主意")
+    }
+
+    @Test
+    fun `v1_20 服务层接质量门槛 重复局面重念 日志写清招法来源`() {
+        fun readSrc(rel: String): String {
+            for (candidate in listOf(rel, rel.removePrefix("app/"), "../" + rel)) {
+                val f = java.io.File(candidate)
+                if (f.exists()) return f.readText()
+            }
+            return ""
+        }
+        val svc = readSrc("app/src/main/java/com/xqdk/chess/assist/ScreenAssistService.kt")
+        assertTrue("必须读到服务源码", svc.isNotEmpty())
+        assertTrue("质量窗口常量", svc.contains("TAP_QUALITY_WINDOW_MS = 1000L"))
+        assertTrue("decide 传质量参数", svc.contains("suggestMature, pvDepthNow") &&
+            svc.contains("qualityElapsed, TAP_QUALITY_WINDOW_MS"))
+        assertTrue("窗口到点强制重渲染", svc.contains("tapQualityTick") &&
+            svc.contains("removeCallbacks(tapQualityTick)"))
+        assertTrue("日志写清念的是什么质量的招", svc.contains("招法质量") &&
+            svc.contains("等招算稳=") && svc.contains("较深PV"))
+        assertTrue("局面未变重念上一招，不重新浅算", svc.contains("重复点按") &&
+            svc.contains("lastTapSpoken") && svc.contains("lastTapFen"))
+        // 映射层延续性
+        val det = readSrc("app/src/main/java/com/xqdk/chess/assist/YoloBoardDetector.kt")
+        assertTrue("检测层透传上一局面", det.contains("prevCanonical = prevCanonical"))
+        val mp = readSrc("app/src/main/java/com/xqdk/chess/assist/DetectionBoardMapper.kt")
+        assertTrue("映射层做延续性裁剪", mp.contains("fromCanonical(it, orientation)") &&
+            mp.contains("PieceLimitTrim.trim(cells, cellScore, prevRaw)"))
+        assertTrue("服务层把上一局面带进映射", svc.contains("yolo.detect(frame, cropHint(frame), currentCanonical)"))
+        report("点一下 → 抓帧（延续性裁剪）→ 建局 → 等定着/较深PV → 念一次；局面未变重念上一招；日志写明招法来源")
     }
 
 }
