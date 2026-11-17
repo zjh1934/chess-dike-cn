@@ -1552,10 +1552,10 @@ class ScreenAssistService : Service() {
             if (isThisRound) {
                 tapSearchRequested = false
                 searchSettled = true
-                VoiceDiag.log(this, "本轮定着",
+                VoiceDiag.log(this@ScreenAssistService, "本轮定着",
                     "seq=$tapSessionSeq 本局面 bestmove 到达 深度=${result.bestLine?.depth ?: 0} → 允许念这一招")
             } else {
-                VoiceDiag.log(this, "本轮定着",
+                VoiceDiag.log(this@ScreenAssistService, "本轮定着",
                     "忽略非本轮/残留 bestmove：不让上一局结果冒充定着（searchSettled 保持 false）")
             }
             diagLog?.appendEngine(result.fen, result.bestLine?.depth ?: 0,
@@ -2069,13 +2069,13 @@ class ScreenAssistService : Service() {
             endTapSessionWithVoice("画面还没稳\n再点一次棋盘", "过渡帧·未凑齐3帧")
             return
         }
-        val (nextState, verdict) = TapConfirm3.feed(tapConfirmState, r.canonical)
+        val (nextState, confirmVerdict) = TapConfirm3.feed(tapConfirmState, r.canonical)
         tapConfirmState = nextState
         VoiceDiag.log(this, "确认帧数",
-            "seq=$seq 第${attempt}帧 ${verdict.reason}（原作者 confirmCount=${TapConfirm3.REQUIRED}）")
-        logTapChain("② 识别完成", "第${attempt}帧 耗时=${cost}ms 数量规范化=$trimInfo ｜ ${verdict.reason}")
-        if (!verdict.accept) {
-            if (retryTapCapture(seq, attempt, verdict.reason)) return
+            "seq=$seq 第${attempt}帧 ${confirmVerdict.reason}（原作者 confirmCount=${TapConfirm3.REQUIRED}）")
+        logTapChain("② 识别完成", "第${attempt}帧 耗时=${cost}ms 数量规范化=$trimInfo ｜ ${confirmVerdict.reason}")
+        if (!confirmVerdict.accept) {
+            if (retryTapCapture(seq, attempt, confirmVerdict.reason)) return
             endTapSessionWithVoice("画面没认稳\n再点一次棋盘",
                 "未凑齐${TapConfirm3.REQUIRED}帧一致(已试${tapSessionRecCount}帧)")
             return
