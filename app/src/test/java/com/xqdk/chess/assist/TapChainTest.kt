@@ -1080,7 +1080,8 @@ class TapChainTest {
         val cur = AssistBoard.clone(prev)
         val (cx, cy) = findPiece(cur, Piece.WJU)
         cur[cy][cx] = Piece.WBING              // 红车被认成红卒
-        assertTrue("类别错在合法性检查里也可能合法", AssistBoard.validate(cur).isEmpty())
+        // 裸构造会让「兵」数达上限 +1（真实链路里 PieceLimitTrim 会先裁过），
+        // 所以这里不对 cur 断言 validate；只验证 BoardRepair 把类别改回、不补空格。
         val r = BoardRepair.repair(prev, cur)
         assertEquals(1, r.fixed)
         assertFalse("改回后必须放行", r.suspect)
