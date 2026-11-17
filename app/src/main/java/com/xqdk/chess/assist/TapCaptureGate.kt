@@ -2,6 +2,8 @@ package com.xqdk.chess.assist
 
 /**
  * v1.14：点棋盘「立即读取当前屏幕」的插入点门禁。纯 JVM，CI 可直接断言。
+ * v1.24：点按档一律丢弃点前缓冲帧、强制新采一帧（见 ScreenAssistService
+ * .drainBufferedFrames）；保留「点击后第一帧绕过全部帧闸门」这条硬保证。
  *
  * 之前错在哪：点棋盘功能挂在**帧循环 / 缓存帧**上 —— startTapRecognition 直接拿
  * `lastFrame`（点击前缓存的画面）去识别。而空闲态帧回调只在帧差 >= 0.2% 时才更新
@@ -15,7 +17,12 @@ package com.xqdk.chess.assist
  */
 object TapCaptureGate {
 
-    /** 帧来源：缓冲现取 > 点击后新帧 > 缓存兜底（某些 ROM 静止屏幕不产帧） */
+    /**
+     * 帧来源。v1.24 起点按档**固定走 POST_TAP_FRAME**：点击先把缓冲区里点前
+     * 残留帧全部取走丢弃，再强制重提交一帧，拿到的必然是点后新画面。
+     * LIVE_BUFFER（点前缓冲现取）与 pickSource 保留给常开档与单测对照，
+     * 不再作为点按档的主路径 —— 用户实测「它没在算我点了之后的画面」。
+     */
     enum class Source { LIVE_BUFFER, POST_TAP_FRAME, CACHED_FALLBACK }
 
     fun pickSource(bufferHit: Boolean, postTapFrame: Boolean): Source = when {

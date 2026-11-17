@@ -1872,13 +1872,16 @@ class ScreenAssistService : Service() {
         logTapChain("① 点棋盘触发", "手势→立即抓取当前屏幕这一帧 seq=$seq（旧建议已擦除；数量误检就地修，不叫用户重点）")
         setStatus("正在读取屏幕…")
         postRender()   // 立即把面板上的旧箭头擦掉，别让用户以为还停在上一步
-        // ① 缓冲里若有现成帧，立刻取用（最快路径，同步识别）
-        if (!captureBufferedFrame(seq)) {
-            // ② 否则强制 VirtualDisplay 重提交一帧；帧回调会无条件直投识别
-            forceCaptureFrame()
-            // ③ 屏幕完全静止、某些 ROM 不产帧时的兜底：用「最近一次真实屏幕帧」
-            armTapCaptureTimeout()
-        }
+        // v1.24：点一下一律拿「点击后新采的那一帧」，不再用点击前缓冲帧。
+        // 先把 ImageReader 里点击前残留的缓冲帧取走丢弃（不识别、不推理），
+        // 再强制 VirtualDisplay 重提交一帧；缓冲区已空，onImageAvailable 收到的
+        // 必然是点后新画面 → 无条件直投识别（绕过帧节流/帧差/节拍器）。
+        // 只重提交**一次**、拿到就用，不做跨帧一致性比对 —— v1.21 为凑 3 帧
+        // 反复重提交造出 A/B 两套合成画面、9 次点按全失败的教训不重演。
+        drainBufferedFrames(seq)
+        forceCaptureFrame()
+        // 屏幕完全静止、某些 ROM 不产帧时的兜底：用「最近一次真实屏幕帧」
+        armTapCaptureTimeout()
     }
 
     /** v1.14：收掉抓帧待办（连点/收场/释放录屏都走这里，避免迟到帧顶掉新一轮）。 */
@@ -1915,22 +1918,19 @@ class ScreenAssistService : Service() {
         return true
     }
 
-    /** v1.14：点击瞬间先取 ImageReader 缓冲里现成的帧；有就同步识别，最快。 */
-    private fun captureBufferedFrame(seq: Int): Boolean {
-        val reader = imageReader ?: return false
-        val image = try { reader.acquireLatestImage() } catch (e: Exception) { null }
-            ?: return false
-        return try {
-            val f = imageToFrame(image)
-            val attempt = tapCaptureAttempt
-            cancelTapCapture()
-            VoiceDiag.log(this, "点按抓帧", "seq=$seq 第${attempt}帧：缓冲现取 → 立即识别")
-            handleTapSingleFrame(f, seq,
-                TapCaptureGate.label(TapCaptureGate.Source.LIVE_BUFFER), attempt)
-            true
-        } finally {
-            image.close()
+    /** v1.24：丢弃点击前残留在 ImageReader 缓冲区的帧（只取走并关闭，不识别、
+     *  不推理、不支招）。保证 forceCaptureFrame() 之后 onImageAvailable 拿到的
+     *  必然是点后新采帧，而不是点之前压在缓冲里的旧画面。 */
+    private fun drainBufferedFrames(seq: Int) {
+        val reader = imageReader ?: return
+        var drained = 0
+        while (drained < 4) {
+            val image = try { reader.acquireLatestImage() } catch (e: Exception) { null } ?: break
+            try { image.close() } catch (_: Exception) {}
+            drained++
         }
+        VoiceDiag.log(this, "点按抓帧",
+            "seq=$seq 丢弃点击前残留缓冲帧 ${drained} 帧（不识别不推理）→ 只认点击后新采帧")
     }
 
     /** v1.14：屏幕静止时 MediaProjection 可能不产新帧 —— 主动让 VirtualDisplay
@@ -2056,21 +2056,20 @@ class ScreenAssistService : Service() {
             return
         }
         val raw = result!!
-        // v1.23：合法性门槛只查「数量超限」，漏认一个车（车 2→1）或红车认成
-        // 红卒照样合法，单帧直出会直接按残缺棋盘算招 —— 这就是「瞎指挥」。
-        // 拿上一次确认的局面当锚，把这一帧里孤立漏检 / 同阵营类别混淆就地补回，
-        // 不重抓帧、不跨帧比对（v1.21 重提交画面自己造抖动的教训）。
+        // v1.24：不再把漏检的子按上一局面补回 —— 那会把「对方真走了一步」撤销成
+        // 上一手，用户感觉「他完全没在算我点之后的画面」。现在只纠正同格类别混淆
+        // （车卒不分），并判定这一帧是真实走子还是没认全；没认全就明说不出招。
         val fix = BoardRepair.repair(currentCanonical, raw.canonical)
         VoiceDiag.log(this, "识别修补",
             "seq=$seq 上一局面=${if (currentCanonical != null) "有" else "无"} " +
-            "修补=${fix.fixed}格 明细=${fix.detail} " +
+            "纠正=${fix.fixed}格 明细=${fix.detail} ${fix.change} " +
             "可疑=${fix.suspect}${if (fix.reason.isNotEmpty()) " 原因=${fix.reason}" else ""} → " +
-            if (fix.suspect) "不建局不支招" else "按修好的局面建局")
+            if (fix.suspect) "不建局不支招" else "按当前这一帧建局(不回退上一局面)")
         if (fix.suspect) {
             logTapChain("② 识别可疑（链路在此收场）",
-                "单帧缺子/类别错且修不好：${fix.reason} → 宁可不出招，绝不按错局面瞎指挥")
+                "${fix.change}：${fix.reason} → 宁可不出招，绝不按错局面或旧局面瞎指挥")
             endTapSessionWithVoice("这帧没认全\n再点一次棋盘", "识别可疑·未支招",
-                "这帧有个子没认准，没敢给你出招，再点一次")
+                "这帧没认全，没敢给你出招，再点一次")
             return
         }
         val r = if (fix.fixed > 0) {
@@ -2096,7 +2095,8 @@ class ScreenAssistService : Service() {
             "用于常开档；点一下棋盘不动，按这一帧建局（不反复重提交画面制造抖动）")
         logTapChain("② 识别完成",
             "第${attempt}帧 耗时=${cost}ms 单帧合法 数量规范化=$trimInfo " +
-            "识别修补=${fix.fixed}格(${fix.detail}) → 直接建局（不跨帧比对）")
+            "识别修补=${fix.fixed}格(${fix.detail}) ${fix.change} → " +
+            "按当前这一帧直接建局（不补空格、不回退上一局面、不跨帧比对）")
         applyTapDirectBoard(r)
     }
 

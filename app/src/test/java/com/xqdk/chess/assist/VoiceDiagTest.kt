@@ -102,7 +102,7 @@ class VoiceDiagTest {
 
     @Test
     fun `增强功能诊断模块版本常量稳定`() {
-        assertEquals("1.23", VoiceDiag.VOICE_MODULE_VERSION)
+        assertEquals("1.24", VoiceDiag.VOICE_MODULE_VERSION)
     }
 
     @Test
@@ -130,17 +130,17 @@ class VoiceDiagTest {
 
     @Test
     fun `文档头部补包名识别方式与覆盖范围`() {
-        val block = VoiceDiag.metaBlock("1.23", "点按出招")
-        assertTrue(block.contains("- 版本：1.23"))
+        val block = VoiceDiag.metaBlock("1.24", "点按出招")
+        assertTrue(block.contains("- 版本：1.24"))
         assertTrue(block.contains("- 包名：com.xqdk.chess"))
         assertTrue(block.contains("- 识别方式：点按出招"))
         assertTrue(block.contains("- 诊断覆盖："))
-        assertTrue(block.contains("- 诊断模块版本：1.23"))
+        assertTrue(block.contains("- 诊断模块版本：1.24"))
     }
 
     @Test
     fun `导出文档隐私提示写明覆盖链路且不记敏感内容`() {
-        val doc = VoiceDiag.buildExportDocument("d", "1.23", 36, "ts", emptyList())
+        val doc = VoiceDiag.buildExportDocument("d", "1.24", 36, "ts", emptyList())
         assertTrue(doc.contains("# XQDK 增强功能诊断"))
         assertTrue(doc.contains("点按出招会话"))
         assertTrue(doc.contains("不含识别帧像素"))

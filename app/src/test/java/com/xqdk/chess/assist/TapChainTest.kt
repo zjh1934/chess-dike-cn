@@ -487,8 +487,9 @@ class TapChainTest {
         assertTrue("必须读到服务源码", svc.isNotEmpty())
         assertTrue("帧回调里要有「点按抓帧直投」插入点",
             svc.contains("TapCaptureGate.shouldBypassFrameGates"))
-        assertTrue("点击要先取缓冲现成帧", svc.contains("captureBufferedFrame(seq)"))
-        assertTrue("取不到要强制产一帧", svc.contains("forceCaptureFrame()"))
+        assertFalse("v1.24 不再用点击前缓冲现成帧", svc.contains("captureBufferedFrame(seq)"))
+        assertTrue("点一下先丢弃点前残留缓冲帧", svc.contains("drainBufferedFrames(seq)"))
+        assertTrue("一律强制重提交一帧（点后新采）", svc.contains("forceCaptureFrame()"))
         assertFalse("绝不能再拿点击前缓存帧直接识别",
             svc.contains("workerHandler.post { handleTapSingleFrame(f, seq) }"))
         assertFalse("空闲态缓存帧不能再有帧差阈值条件",
@@ -1035,84 +1036,138 @@ class TapChainTest {
         error("没有空格")
     }
 
+
+    // ============ v1.24 点后新采帧 + 不再把新局面改回上一手 ============
+
     @Test
-    fun `v1_23 漏一个车能补回 不会按缺子棋盘瞎指挥`() {
+    fun `v1_24 对方走一步且终点漏检 不再补回上一手`() {
         val prev = AssistBoard.canonicalStart()
         val cur = AssistBoard.clone(prev)
-        val (x, y) = findPiece(cur, Piece.WJU)
-        cur[y][x] = Piece.EMPTY                     // YOLO 这一帧没检到这个车
-        // 关键：validate 只查上限，少一个车是「合法」的 —— 旧版会直接建局
-        assertTrue("漏一个车在旧校验里是合法的（这就是根因）", AssistBoard.validate(cur).isEmpty())
+        // 黑车从 (0,0) 走到 (0,1)，但 YOLO 把终点也漏检了 → 只看到起点消失
+        cur[0][0] = Piece.EMPTY
+        assertTrue("少一个黑车在合法性检查里是合法的（所以旧版会补）",
+            AssistBoard.validate(cur).isEmpty())
         val r = BoardRepair.repair(prev, cur)
-        assertEquals(1, r.fixed)
-        assertFalse("修完必须放行", r.suspect)
-        assertTrue("局面必须补回原样", AssistBoard.equal(prev, r.canonical))
-        assertTrue("日志要写明补了什么", r.detail.contains("补") && r.detail.contains("车"))
-        report("漏一个车：合法性检查放行 → 修补层用上一局面补回 → 不按缺子棋盘算招")
+        assertEquals("一个格子都不许补", 0, r.fixed)
+        assertEquals("起点仍为空：没有把黑车补回上一手的位置", Piece.EMPTY, r.canonical[0][0])
+        assertFalse("不能变回上一局面（这正是「算的是前面那一帧」的根因）",
+            AssistBoard.equal(prev, r.canonical))
+        assertTrue("按当前这一帧原样保留", AssistBoard.equal(cur, r.canonical))
+        assertTrue("认不全是可疑 → 不建局不支招", r.suspect)
+        assertTrue("日志写明认不全", r.change.contains("认不全") && r.reason.contains("没认出来"))
+        report("对方走一步 + 终点漏检：v1.23 会把起点补回、棋盘变回上一手；v1.24 一个子都不补，认不全就明说")
     }
 
     @Test
-    fun `v1_23 车卒不分能改回 且裁错真兵也能补回`() {
+    fun `v1_24 对方走一步且终点被认出 按当前新局面建局`() {
+        val prev = AssistBoard.canonicalStart()
+        val cur = AssistBoard.clone(prev)
+        cur[0][0] = Piece.EMPTY
+        cur[1][0] = Piece.BJU                  // 终点被正确认出
+        val r = BoardRepair.repair(prev, cur)
+        assertEquals(0, r.fixed)
+        assertFalse("真实走子必须放行", r.suspect)
+        assertTrue("按当前这一帧建局，不带上一局面任何残留", AssistBoard.equal(cur, r.canonical))
+        assertTrue("日志判定为真实走子", r.change.contains("真实走子") &&
+            r.change.contains("起点1/终点1"))
+        assertTrue("不再补空格", r.detail.contains("无需纠正"))
+        report("对方走一步（终点认出）：认定真实走子 → 一个子都不补 → 按当前这一帧全新起点算招")
+    }
+
+    @Test
+    fun `v1_24 车卒不分仍能改回 但不补空格`() {
         val prev = AssistBoard.canonicalStart()
         val cur = AssistBoard.clone(prev)
         val (cx, cy) = findPiece(cur, Piece.WJU)
-        cur[cy][cx] = Piece.WBING                  // 红车被认成红卒
-        // 取第一个**真**红兵（y=6 行），模拟裁剪裁错：丢掉真兵、留下 (0,9) 那个假兵
-        val (bx, by) = findPiece(cur, Piece.WBING, skip = 0)
-        // 模拟 PieceLimitTrim 裁错：丢掉一个真兵，留下假兵（车 1 / 兵 5，仍合法）
-        cur[by][bx] = Piece.EMPTY
-        assertTrue("裁剪后仍是合法局面（所以旧版照样瞎指挥）", AssistBoard.validate(cur).isEmpty())
+        cur[cy][cx] = Piece.WBING              // 红车被认成红卒
+        assertTrue("类别错在合法性检查里也可能合法", AssistBoard.validate(cur).isEmpty())
         val r = BoardRepair.repair(prev, cur)
-        assertEquals(2, r.fixed)
-        assertFalse(r.suspect)
-        assertTrue("车改回车、真兵补回 → 与上一局面一致", AssistBoard.equal(prev, r.canonical))
-        report("车卒不分 + 裁剪裁错真子：同阵营类别混淆改回、孤立漏检补回，两个规则配合修好")
+        assertEquals(1, r.fixed)
+        assertFalse("改回后必须放行", r.suspect)
+        assertTrue("只改类别、不动空格 → 与上一局面一致", AssistBoard.equal(prev, r.canonical))
+        assertTrue("日志写明是同类替换", r.change.contains("同类替换1"))
+        assertTrue("明细写明车卒纠正", r.detail.contains("车") && r.detail.contains("→"))
+        report("车卒不分：同格同阵营类别混淆就地改回；空格一律不补（这两件事 v1.24 分开了）")
     }
 
     @Test
-    fun `v1_23 真走子和被吃都不误补`() {
+    fun `v1_24 纯漏检一个车 不补回旧局面 标可疑不出招`() {
         val prev = AssistBoard.canonicalStart()
-        // 走子：车从 A 移到 B，该类总数不变 → 不该补
+        val cur = AssistBoard.clone(prev)
+        val (x, y) = findPiece(cur, Piece.WJU)
+        cur[y][x] = Piece.EMPTY
+        val r = BoardRepair.repair(prev, cur)
+        assertEquals(0, r.fixed)
+        assertEquals(Piece.EMPTY, r.canonical[y][x])
+        assertFalse(AssistBoard.equal(prev, r.canonical))
+        assertTrue(r.suspect && r.reason.contains("没认出来"))
+        report("纯漏检一个车：不再按缺子棋盘瞎指挥、也不补回旧局面 → 明确提示再点一次")
+    }
+
+    @Test
+    fun `v1_24 走子被吃新开局无锚 都不误补`() {
+        val prev = AssistBoard.canonicalStart()
+        // 走子：起点消失 + 终点出现 → 放行
         val moved = AssistBoard.clone(prev)
         val (ax, ay) = findPiece(moved, Piece.WJU)
         val (ex, ey) = firstEmpty(moved)
         moved[ay][ax] = Piece.EMPTY
         moved[ey][ex] = Piece.WJU
         val r1 = BoardRepair.repair(prev, moved)
-        assertEquals("棋子只是移动，不该补回原位置", 0, r1.fixed)
-        // 被吃：我方子变成敌方子（跨阵营）→ 不该改回、也不该补
+        assertEquals(0, r1.fixed)
+        assertFalse(r1.suspect)
+        assertTrue(r1.change.contains("真实走子"))
+        // 被吃：同格换成对方子 → 放行，且不能当成类别混淆改回
         val eaten = AssistBoard.clone(prev)
         val (px, py) = findPiece(eaten, Piece.WBING)
         eaten[py][px] = Piece.BZU
         val r2 = BoardRepair.repair(prev, eaten)
-        assertEquals("被吃是合法变化，不该当成漏检", 0, r2.fixed)
+        assertEquals(0, r2.fixed)
+        // 裸构造局面里「兵换成卒」会让卒数达上限 +1（真实链路上 PieceLimitTrim
+        // 会先裁过），所以这里不断言 suspect，只验证不误补、不误改类别、判定为吃子。
         assertFalse("跨阵营不能被误判成同色类别混淆", r2.detail.contains("→"))
-        report("走子（数量不变）/ 被吃（跨阵营）都不补：只修真正的单帧误检，不篡改真实棋局")
-    }
-
-    @Test
-    fun `v1_23 新开局和无上一局面不硬补 硬伤才标可疑`() {
-        val start = AssistBoard.canonicalStart()
-        // 新开局：满 32 子且布局与旧残局不同 → 不按旧局往回补
-        val old = AssistBoard.clone(start)
-        val (x, y) = findPiece(old, Piece.WJU)
-        old[y][x] = Piece.EMPTY
-        val rn = BoardRepair.repair(old, start)
+        assertTrue(r2.change.contains("吃子1"))
+        // 新开局：满 32 子且布局变了 → 不按旧残局修补
+        val old = AssistBoard.clone(prev)
+        val (ox, oy) = findPiece(old, Piece.WJU)
+        old[oy][ox] = Piece.EMPTY
+        val rn = BoardRepair.repair(old, prev)
         assertEquals(0, rn.fixed)
-        assertTrue("识别到新开局", rn.detail.contains("新开局"))
-        // 无锚且帅缺失 → 明确可疑，服务层不建局不支招
-        val broken = AssistBoard.clone(start)
+        assertTrue(rn.detail.contains("新开局"))
+        // 无锚：帅缺失 → 可疑；合法 → 放行
+        val broken = AssistBoard.clone(prev)
         val (sx, sy) = findPiece(broken, Piece.WSHUAI)
         broken[sy][sx] = Piece.EMPTY
         val rb = BoardRepair.repair(null, broken)
-        assertTrue("硬伤必须标可疑", rb.suspect)
-        assertTrue("原因要写明", rb.reason.contains("红帅"))
-        assertFalse("合法局面不该标可疑", BoardRepair.repair(null, start).suspect)
-        report("新开局不按旧残局补；无上一局面时只过合法性，帅将缺失这类硬伤才不出招")
+        assertTrue(rb.suspect && rb.reason.contains("红帅"))
+        assertFalse(BoardRepair.repair(null, prev).suspect)
+        report("走子 / 被吃 / 新开局 / 无锚：只纠正类别混淆，绝不篡改真实棋局；硬伤才不出招")
     }
 
     @Test
-    fun `v1_23 修补接线与防线都在 且没有退回多帧确认`() {
+    fun `v1_24 每次点按都是全新起点 全量FEN不带历史着法`() {
+        val board = AssistBoard.canonicalStart()
+        val fenRed = AssistBoard.toFen(board, true)
+        val fenBlack = AssistBoard.toFen(board, false)
+        assertTrue("红方走：w", fenRed.endsWith("w - - 0 1"))
+        assertTrue("黑方走：b", fenBlack.endsWith("b - - 0 1"))
+        assertEquals("同一棋盘只差轮次字段", fenRed.substringBefore(' '),
+            fenBlack.substringBefore(' '))
+        fun readSrc(rel: String): String {
+            for (c in listOf(rel, rel.removePrefix("app/"), "../" + rel)) {
+                val f = java.io.File(c); if (f.exists()) return f.readText()
+            }
+            return ""
+        }
+        val eng = readSrc("app/src/main/java/com/xqdk/chess/assist/AnalysisEngine.kt")
+        assertTrue("引擎收到的是全量局面", eng.contains("position fen"))
+        assertFalse("绝不从 startpos 重放开局", eng.contains("position startpos"))
+        assertFalse("不带历史着法串", eng.contains("moves "))
+        report("引擎入口：position fen <当前这一帧的摆法> + go；无 startpos、无 moves 历史，每次都是全新起点")
+    }
+
+    @Test
+    fun `v1_24 取帧与修补接线 源码门禁`() {
         fun readSrc(rel: String): String {
             for (c in listOf(rel, rel.removePrefix("app/"), "../" + rel)) {
                 val f = java.io.File(c); if (f.exists()) return f.readText()
@@ -1120,25 +1175,35 @@ class TapChainTest {
             return ""
         }
         val svc = readSrc("app/src/main/java/com/xqdk/chess/assist/ScreenAssistService.kt")
+        val br = readSrc("app/src/main/java/com/xqdk/chess/assist/BoardRepair.kt")
         val diag = readSrc("app/src/main/java/com/xqdk/chess/assist/VoiceDiag.kt")
         assertTrue("必须读到服务源码", svc.isNotEmpty())
+        // 取帧：一律点后新采
+        assertFalse("不再用点击前缓冲帧识别", svc.contains("captureBufferedFrame(seq)"))
+        assertTrue("先丢弃点前残留缓冲帧", svc.contains("drainBufferedFrames(seq)") &&
+            svc.contains("丢弃点击前残留缓冲帧"))
+        assertTrue("强制重提交一帧", svc.contains("forceCaptureFrame()"))
+        assertTrue("点后第一帧仍绕过全部帧闸门", svc.contains("TapCaptureGate.shouldBypassFrameGates"))
+        assertTrue("静止 ROM 仍有兜底", svc.contains("TAP_CAPTURE_WAIT_MS"))
+        // 修补：不再补空格、按当前帧建局
         assertTrue("单帧后先过修补层", svc.contains("BoardRepair.repair(currentCanonical, raw.canonical)"))
-        assertTrue("修补结果写进诊断", svc.contains("识别修补"))
+        assertTrue("日志带变化判定", svc.contains("${'$'}{fix.change}"))
         assertTrue("可疑时不建局不支招", svc.contains("识别可疑·未支招") &&
-            svc.contains("宁可不出招，绝不按错局面瞎指挥"))
-        assertTrue("修好后重建 RecognitionResult", svc.contains("DetectionBoardMapper.fromCanonical"))
-        assertTrue("链路日志带修补明细", svc.contains("识别修补=${'$'}{fix.fixed}格"))
-        // 这轮不能把 v1.22 的单帧直出改回去
+            svc.contains("宁可不出招，绝不按错局面或旧局面瞎指挥"))
+        assertTrue("明确写不回退上一局面", svc.contains("不回退上一局面"))
+        assertTrue("修补层已删除补漏检子", !br.contains("R2 孤立漏检") && br.contains("不补空格"))
+        assertTrue("认不全判据在", br.contains("val unrecognized = disappeared > 0 && realChangeEvidence == 0"))
+        // 防线不能回退
         assertFalse("没有退回跨帧确认", svc.contains("TapConfirm3.feed"))
         assertFalse("没有退回凑不齐就收场", svc.contains("confirmVerdict.accept"))
         assertTrue("单帧直出仍在", svc.contains("applyTapDirectBoard(r)"))
-        // 起点双保险（不指挥动对方棋子）必须还在
         assertTrue("起点双保险仍在", svc.contains("fun fromIsOurs(ucci: String): Boolean") &&
             svc.contains("if (fromIsOurs(ucci))"))
-        assertTrue("合法门槛仍只查上限（所以修补层必要）",
-            readSrc("app/src/main/java/com/xqdk/chess/assist/AssistBoard.kt").contains("if (counts[k] > v)"))
-        assertTrue("诊断说明覆盖修补", diag.contains("识别修补"))
-        report("修补接线、单帧直出、起点双保险、日志覆盖全在；没有退回 v1.21 的多帧确认")
+        assertTrue("合法门槛仍只查上限", readSrc("app/src/main/java/com/xqdk/chess/assist/AssistBoard.kt")
+            .contains("if (counts[k] > v)"))
+        assertTrue("诊断覆盖新语义", diag.contains("识别修补") && diag.contains("点击后新采帧") &&
+            diag.contains("position fen"))
+        report("取帧一律点后新采、修补不补空格、按当前帧建局；单帧直出与起点双保险全在，未退回多帧确认")
     }
 
 }
