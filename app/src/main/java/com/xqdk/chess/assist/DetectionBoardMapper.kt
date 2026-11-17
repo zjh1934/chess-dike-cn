@@ -109,8 +109,11 @@ object DetectionBoardMapper {
         // v1.18：逐类数量上限裁剪 —— YOLO 多认 1 个卒/象时就地修好，
         // 而不是把整局判死让用户连点。v1.20：传入上一局面做延续性加成，
         // 优先丢背景误检、保住真棋子（避免按缺子局面算出一堆馊主意）。
-        // 放在 canonical 转换之前，先把 prevCanonical 还原成屏幕布局坐标系。
-        val prevRaw = prevCanonical?.let { fromCanonical(it, orientation) }
+        // 放在 canonical 转换之前。prevCanonical 是「红恒在下」坐标系，需先还原成
+        // 屏幕布局；这里用**裁剪前粗朝向**只做延续性软加成，正式朝向仍在裁剪之后判定，
+        // 避免多认一个「帅」把朝向判反（07:58 日志里有 3 次「帅×1」）。
+        val roughOrientation = detectOrientation(cells) ?: Orientation.STANDARD
+        val prevRaw = prevCanonical?.let { fromCanonical(it, roughOrientation) }
         val trim = PieceLimitTrim.trim(cells, cellScore, prevRaw)
         // 裁剪后重算（O(90)，可忽略）：pieceCount / 平均分都要反映真实留下的棋子
         val pieceCount = cells.sumOf { row -> row.count { it != Piece.EMPTY } }
