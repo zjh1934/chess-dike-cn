@@ -168,6 +168,18 @@
         <item name="android:maxLines">1</item>
     </style>
 
+    <!-- v1.22 红/黑两个大方块（取代「我方」小芯片 + 「引擎」芯片）：34dp 高、
+         13sp 居中，选中态实底由 OverlayPanelView.paintSideBlock 运行时注入 -->
+    <style name="OverlaySideBlock">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">34dp</item>
+        <item name="android:gravity">center</item>
+        <item name="android:textSize">13sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:maxLines">1</item>
+        <item name="android:textColor">@color/qi_ivory</item>
+    </style>
+
     <!-- 动作按钮（更新/停止/关闭、变招/悔棋/手动）：1dp 描边，底由主题运行时注入 -->
     <style name="OverlayAction">
         <item name="android:background">@drawable/overlay_action_bg</item>

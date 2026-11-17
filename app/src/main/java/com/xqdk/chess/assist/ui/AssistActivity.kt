@@ -216,15 +216,13 @@ class AssistActivity : AppCompatActivity() {
             val capturing = svc?.isCapturing() == true
             val verdict = CaptureStopGate.resolve(bound != null, svc != null, capturing)
             com.xqdk.chess.assist.VoiceDiag.log(this, "录屏停止",
-                "主页一键关闭录屏：点击 引用=${verdict.source} isCapturing=$capturing " +
-                "可关闭=${verdict.ok} 服务存在=${svc != null}")
-            if (!verdict.ok) {
-                Toast.makeText(this, verdict.hint, Toast.LENGTH_SHORT).show()
-                refreshStatus()
-                return@setOnClickListener
-            }
-            // 与悬浮窗「关闭」、主按钮第二态完全同一条路径：收面板 + 停录屏 + 停服务
-            svc!!.stopGuidance("主页一键关闭录屏")
+                "主页一键关闭共享屏幕：点击 引用=${verdict.source} isCapturing=$capturing " +
+                "执行=一律停止 ${verdict.hint} 服务存在=${svc != null}")
+            // v1.22：不再因「录屏未运行 / 引用断开」提前 return。用户按了就要停。
+            // 服务引用在就走完整收场（收面板 + mediaProjection.stop + stopForeground + stopSelf）；
+            // 引用不在也发停止意图，onDestroy 里 releaseCapture 兜底，确保系统录屏指示消失。
+            svc?.stopGuidance("主页一键关闭共享屏幕")
+            runCatching { stopService(Intent(this, ScreenAssistService::class.java)) }
             Toast.makeText(this, "录屏已关闭，识别与悬浮窗均已停止", Toast.LENGTH_SHORT).show()
             refreshStatus()
         }

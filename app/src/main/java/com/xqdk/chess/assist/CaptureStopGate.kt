@@ -11,11 +11,19 @@ package com.xqdk.chess.assist
 object CaptureStopGate {
     data class Verdict(val ok: Boolean, val source: String, val hint: String)
 
+    /**
+     * v1.22：**不再拦截**。用户按「一键关闭共享屏幕」就是要立刻停。
+     * v1.7~v1.21 在 `capturing=false` 或服务引用断掉时提前 return，只弹 Toast，
+     * 用户实测「按了没有什么效果」——11:44 日志里连一条「录屏停止」都没有。
+     * 现在无论状态如何都返回 ok，调用方一律执行停止；hint 只写进日志，不作门槛。
+     */
     fun resolve(boundAvailable: Boolean, globalAvailable: Boolean, capturing: Boolean): Verdict {
-        if (!boundAvailable && !globalAvailable)
-            return Verdict(false, "无可用引用", "服务未连接，请回主页重新授权启动")
-        if (!capturing)
-            return Verdict(false, "录屏未运行", "录屏未在运行，无需关闭")
-        return Verdict(true, if (boundAvailable) "绑定" else "全局兜底", "")
+        val source = when {
+            boundAvailable -> "绑定"
+            globalAvailable -> "全局兜底"
+            else -> "无引用(仍发停止意图)"
+        }
+        val hint = if (capturing) "" else "录屏状态=未运行，仍照常执行停止"
+        return Verdict(true, source, hint)
     }
 }

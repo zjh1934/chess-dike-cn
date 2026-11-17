@@ -89,8 +89,12 @@ enum class OverlayAction {
     UNDO,
     /** 引擎深度档切换（固定深度循环） */
     CYCLE_STRENGTH,
-    /** v1.13 我方 红/黑 互斥切换（原「哈希」按钮位）：点一下切到另一色并锁定 */
+    /** v1.13 我方 红/黑 互斥切换（保留兼容）；v1.22 面板改两个大方块直选 */
     TOGGLE_MY_SIDE,
+    /** v1.22 红方大色块：点一下直接锁定我方=红 */
+    SET_MY_SIDE_RED,
+    /** v1.22 黑方大色块：点一下直接锁定我方=黑 */
+    SET_MY_SIDE_BLACK,
     /** 更新棋局（原"轮次"）：翻转"我方/对方"走子方并按新轮次重建/重分析 */
     FLIP_TURN,
     /** 紧急手动模式开关：识别失效时在小棋盘上手工维护局面 */
@@ -124,8 +128,8 @@ class OverlayPanelView @JvmOverloads constructor(
     private val btnClose: TextView
     private val btnStrength: TextView
     private val btnTime: TextView
-    private val btnMySide: TextView
-    private val btnEngine: TextView
+    private val btnSideRed: TextView
+    private val btnSideBlack: TextView
     private val btnChange: TextView
     private val btnMultiPv: TextView
     private val btnUndo: TextView
@@ -218,8 +222,8 @@ class OverlayPanelView @JvmOverloads constructor(
         btnClose = findViewById(R.id.overlay_btn_close)
         btnStrength = findViewById(R.id.overlay_btn_strength)
         btnTime = findViewById(R.id.overlay_btn_time)
-        btnMySide = findViewById(R.id.overlay_btn_my_side)
-        btnEngine = findViewById(R.id.overlay_btn_engine)
+        btnSideRed = findViewById(R.id.overlay_btn_side_red)
+        btnSideBlack = findViewById(R.id.overlay_btn_side_black)
         btnChange = findViewById(R.id.overlay_btn_change)
         btnMultiPv = findViewById(R.id.overlay_btn_multipv)
         btnUndo = findViewById(R.id.overlay_btn_undo)
@@ -235,8 +239,8 @@ class OverlayPanelView @JvmOverloads constructor(
         btnTurn.setOnClickListener { onAction?.invoke(OverlayAction.FLIP_TURN) }
         btnStrength.setOnClickListener { onAction?.invoke(OverlayAction.CYCLE_STRENGTH) }
         btnTime.setOnClickListener { onAction?.invoke(OverlayAction.CYCLE_TIME) }
-        btnMySide.setOnClickListener { onAction?.invoke(OverlayAction.TOGGLE_MY_SIDE) }
-        btnEngine.setOnClickListener { onAction?.invoke(OverlayAction.CYCLE_ENGINE) }
+        btnSideRed.setOnClickListener { onAction?.invoke(OverlayAction.SET_MY_SIDE_RED) }
+        btnSideBlack.setOnClickListener { onAction?.invoke(OverlayAction.SET_MY_SIDE_BLACK) }
         btnMultiPv.setOnClickListener { onAction?.invoke(OverlayAction.CYCLE_MULTIPV) }
         btnFlash.setOnClickListener { onAction?.invoke(OverlayAction.FLASH_STOP) }
         btnClose.setOnClickListener {
@@ -361,10 +365,8 @@ class OverlayPanelView @JvmOverloads constructor(
         btnTime.visibility = if (timeText != null) View.VISIBLE else View.GONE
         setChipText(btnStrength, "深度", depthText)
         setChipText(btnTime, "时间", timeText)
-        // v1.13：这个位置不再是哈希档位，而是「我方 红/黑」互斥按钮。
-        // 哈希保持默认 256MB，不再提供面板切换；锁定时 label 带 ✓ 一眼可辨。
-        setChipText(btnMySide, if (model.mySideLocked) "我方✓" else "我方", model.mySideText)
-        setChipText(btnEngine, "引擎", model.engineText)
+        // v1.22：引擎芯片合并进来，只剩红/黑两个大方块，选中态实心 + ✓ 一眼可辨。
+        paintSideBlocks(model.mySideIsRed)
         val pauseText = if (model.paused) "继续" else "停止"
         if (btnPause.text != pauseText) btnPause.text = pauseText
 
@@ -415,8 +417,9 @@ class OverlayPanelView @JvmOverloads constructor(
         // 值芯片（每个 view 各取一份 Drawable 实例，禁止共享）
         btnStrength.background = theme.chipBackground(context)
         btnTime.background = theme.chipBackground(context)
-        btnMySide.background = theme.chipBackground(context)
-        btnEngine.background = theme.chipBackground(context)
+        // v1.22：红/黑大方块自带选中态底，不套芯片背景；主题切换后强制重绘
+        lastSideRedPainted = null
+        lastModel?.let { paintSideBlocks(it.mySideIsRed) }
 
         // 动作按钮：停止 = 琥珀警示描边（唯一带语义描边的动作）
         btnPause.background = theme.actionBackground(context, palette.stopStroke, palette.stopStrokePressed)
@@ -459,6 +462,36 @@ class OverlayPanelView @JvmOverloads constructor(
      * 顺修历史 bug：原先按 view.text 纯文本比对，Span 颜色不在比较内——换肤后
      * 文本相同即跳过重设，芯片颜色停留在旧调色板；现由 applyTheme 清缓存兜底。
      */
+    /** v1.22：红/黑大方块选中态。选中=实底 + 白字 + ✓，未选中=弱化描边 + 灰字。
+     *  两个色块互斥由 `model.mySideIsRed` 单一来源保证，不可能同时高亮。 */
+    private var lastSideRedPainted: Boolean? = null
+    private fun paintSideBlocks(myRed: Boolean) {
+        if (lastSideRedPainted == myRed) return
+        lastSideRedPainted = myRed
+        paintSideBlock(btnSideRed, myRed, true)
+        paintSideBlock(btnSideBlack, !myRed, false)
+    }
+    private fun paintSideBlock(view: TextView, selected: Boolean, red: Boolean) {
+        val radius = 8f * resources.displayMetrics.density
+        val fill = when {
+            selected && red -> 0xE6C35440.toInt()
+            selected -> 0xF0212226.toInt()
+            else -> 0x0FFFFFFF
+        }
+        val stroke = when {
+            selected -> 0x00000000
+            red -> 0x66C35440.toInt()
+            else -> 0x66A8ADB6.toInt()
+        }
+        view.background = GradientDrawable().apply {
+            cornerRadius = radius
+            setColor(fill)
+            setStroke((1.2f * resources.displayMetrics.density).toInt().coerceAtLeast(1), stroke)
+        }
+        view.text = (if (red) "红方" else "黑方") + if (selected) " ✓" else ""
+        view.setTextColor(if (selected) 0xFFF7F4EE.toInt() else 0xFFA8ADB6.toInt())
+    }
+
     private fun setChipText(view: TextView, label: String, value: String?) {
         val last = chipCache[view]
         if (last != null && last.first == label && last.second == value) return

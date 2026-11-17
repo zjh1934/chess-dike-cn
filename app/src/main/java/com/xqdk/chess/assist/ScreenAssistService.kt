@@ -106,12 +106,12 @@ class ScreenAssistService : Service() {
     /** v1.14：点下去后等「新采帧」的最长时间。超时就用最近一次真实屏幕帧兜底，
      *  绝不空手，也绝不拿旧局面糊弄（缓存帧已改为每帧无条件刷新）。 */
     private const val TAP_CAPTURE_WAIT_MS = 350L
-    /** v1.21：点一下后最多抓几帧来凑齐「连续 3 帧一致」（原作者 BoardTracker
-     *  confirmCount=3）。8 帧是给 YOLO 抖动留的余量；不查节拍器、不等帧差，
-     *  正常 3 帧约 0.4~0.6 秒，不回到 v1.11 的 6~12 秒。 */
-    private const val TAP_CAPTURE_RETRY_MAX = 8
-    /** 8 帧 × YOLO 约 150ms ≈ 1.2s，留余量到 1.4s。 */
-    private const val TAP_CAPTURE_RETRY_WINDOW_MS = 1400L
+    /** v1.22：点按档回到**单帧直出**。原作者 3 帧确认是给「常开录屏、画面一直在动」
+     *  的档用的；咱点一下棋盘不动，为了凑 3 帧反复 setSurface+resize 反而自己造出
+     *  A/B 两套合成画面（11:44 日志：9 次点按 65 帧全合法、却全是「第 1/3 帧一致」，
+     *  「裁掉帅×1」严格隔帧交替），9 次全失败。这里只在**单帧不合法**时最多再抓 3 帧。 */
+    private const val TAP_CAPTURE_RETRY_MAX = 3
+    private const val TAP_CAPTURE_RETRY_WINDOW_MS = 700L
     /** v1.18 硬预算：点下去到「必须有声音」的上限。用户原话「最多两三秒就要给我出声音」。
      *  正常路径（单帧裁剪后直出）约 0.3~0.6s；这个只兜极少数异常，绝不静默。 */
     private const val TAP_HARD_SPEAK_MS = 3000L
@@ -302,8 +302,6 @@ class ScreenAssistService : Service() {
     private var tapNoticeSpoken = false
     /** v1.20：本轮建局时刻，用于日志「建局→念出来」耗时 */
     @Volatile private var tapBoardTs = 0L
-    /** v1.21：原作者口径的连续 3 帧确认状态 */
-    private var tapConfirmState = TapConfirm3.State()
     /** v1.21：真正把着法交给 TTS 的时刻，用于小票「点击→播报」不再冒功 */
     @Volatile private var tapSpeakTs = 0L
     /** v1.21：本轮是否已为自己的局面发过一次完整搜索；防上一局 bestmove 冒充定着 */
@@ -1764,6 +1762,9 @@ class ScreenAssistService : Service() {
             OverlayAction.CYCLE_STRENGTH -> cycleStrength()
             OverlayAction.CYCLE_TIME -> cycleTime()
             OverlayAction.TOGGLE_MY_SIDE -> toggleMySide()
+            // v1.22：两个大色块直选（不是 toggle），点红必红、点黑必黑，互斥
+            OverlayAction.SET_MY_SIDE_RED -> setMySide(true)
+            OverlayAction.SET_MY_SIDE_BLACK -> setMySide(false)
             // v1.13：哈希档位保持默认 256MB，不再提供面板循环（cycleHash 已移除）
             OverlayAction.CYCLE_ENGINE -> {
                 // v1.17：引擎芯片改成只读。以前点它会切到根本加载不了的 ONNX，
@@ -1857,7 +1858,6 @@ class ScreenAssistService : Service() {
         tapCaptureSeq = seq
         tapCaptureAttempt = 1
         tapPendingLegal = null
-        tapConfirmState = TapConfirm3.State()
         tapSpeakTs = 0L
         tapSearchRequested = false
         tapForcedSettle = false
@@ -2057,29 +2057,21 @@ class ScreenAssistService : Service() {
         }
         val r = result!!
         tapPendingLegal = r
-        // v1.21：回到原作者口径 —— 连续 confirmCount=3 帧逐格一致才确认局面。
-        // 用户原话「他怎么保证准确棋盘现状，他识别几次咱就识别几次」。
-        // 与 v1.11 的区别：不查节拍器/不等帧差/不等停稳，点击后立即重提交帧，
-        // 3 帧约 0.4~0.6 秒拿齐；每帧仍有数量规范化（含 v1.20 延续性加成）
-        // 把 YOLO 抖动就地修好，所以凑齐一致不再是碰运气。
+        // v1.22：点按档**单帧直出** —— 点下去那一帧就是用户要算的那一帧。
+        // 「认准」放在这一帧内部（合法性门槛 + 数量规范化 + 延续性保真子 +
+        // 起点双保险），不跨帧比对。11:44 实测证明：为凑原作者的 3 帧一致而
+        // 反复重提交 VirtualDisplay，会制造两套合成画面，YOLO 隔帧多认一个「帅」，
+        // 65 帧全合法却永远凑不齐一致 → 9 次点按 9 次「没看清，再点一次」。
+        // 原作者那 3 帧用于常开档（画面自然流动、连续帧真的一样），语境不同。
         if (!TapConfirm3.pieceJumpPlausible(currentCanonical, r.canonical)) {
             VoiceDiag.log(this, "确认帧数",
-                "seq=$seq 第${attempt}帧 子数跳变过大（原作者门限）→ 判为走子动画/遮挡，不进确认累计")
-            if (retryTapCapture(seq, attempt, "子数跳变过大（疑似过渡帧）")) return
-            endTapSessionWithVoice("画面还没稳\n再点一次棋盘", "过渡帧·未凑齐3帧")
-            return
+                "seq=$seq 第${attempt}帧 子数跳变偏大（原作者门限）→ 仅记录，不阻塞单帧直出")
         }
-        val (nextState, confirmVerdict) = TapConfirm3.feed(tapConfirmState, r.canonical)
-        tapConfirmState = nextState
         VoiceDiag.log(this, "确认帧数",
-            "seq=$seq 第${attempt}帧 ${confirmVerdict.reason}（原作者 confirmCount=${TapConfirm3.REQUIRED}）")
-        logTapChain("② 识别完成", "第${attempt}帧 耗时=${cost}ms 数量规范化=$trimInfo ｜ ${confirmVerdict.reason}")
-        if (!confirmVerdict.accept) {
-            if (retryTapCapture(seq, attempt, confirmVerdict.reason)) return
-            endTapSessionWithVoice("画面没认稳\n再点一次棋盘",
-                "未凑齐${TapConfirm3.REQUIRED}帧一致(已试${tapSessionRecCount}帧)")
-            return
-        }
+            "seq=$seq 第${attempt}帧 点按档单帧直出：原作者 confirmCount=${TapConfirm3.REQUIRED} " +
+            "用于常开档；点一下棋盘不动，按这一帧建局（不反复重提交画面制造抖动）")
+        logTapChain("② 识别完成",
+            "第${attempt}帧 耗时=${cost}ms 单帧合法 数量规范化=$trimInfo → 直接建局（不跨帧比对）")
         applyTapDirectBoard(r)
     }
 
@@ -2138,7 +2130,7 @@ class ScreenAssistService : Service() {
         VoiceDiag.log(this, "敌我判定",
             "我方=${if (myRed) "红" else "黑"} 来源=$sideSource 按我方回合请求 " +
             if (isNewGame || prev == null) "首次/新对局重定" else "沿用锁定")
-        logTapChain("③ 局面重建", "已按连续 ${TapConfirm3.REQUIRED} 帧一致的局面建局 → 我方=${if (myRed) "红" else "黑"}（$sideSource）→ 本局面完整搜索一次，只等 bestmove 定着才念")
+        logTapChain("③ 局面重建", "已按点击这一帧直接建局 → 我方=${if (myRed) "红" else "黑"}（$sideSource）→ 本局面完整搜索一次，只等 bestmove 定着才念")
         postRender()
         scheduleAnalysis()
         setStatus("棋盘已认准\n正在算这一招…")
@@ -2400,6 +2392,30 @@ class ScreenAssistService : Service() {
         val text = if (next) "红" else "黑"
         VoiceDiag.log(this, "我方选择",
             "seq=$tapSessionSeq t=${System.currentTimeMillis()} 面板点选：我方=$text（手动锁定·跨对局保持）旧=" +
+            (old?.let { if (it) "红" else "黑" } ?: "跟随识别") +
+            " → 新=$text；后续所有点按均按${text}方支招")
+        setStatus("我方已锁定为${text}方\n点棋盘即按${text}方支招")
+        postRender()
+    }
+
+    /** v1.22：面板红/黑大色块直选。点哪个就锁哪个，重复点同一色不变；
+     *  清掉旧颜色算出的建议，下一轮点棋盘按新颜色支招（不拿旧招误导）。 */
+    private fun setMySide(red: Boolean) {
+        val old = mySideOverrideRed
+        if (old == red) {
+            VoiceDiag.log(this, "我方选择",
+                "t=${System.currentTimeMillis()} 面板大色块：我方=${if (red) "红" else "黑"}（已锁定，无需切换）")
+            setStatus("我方已锁定为${if (red) "红" else "黑"}方\n点棋盘即按此颜色支招")
+            postRender()
+            return
+        }
+        mySideOverrideRed = red
+        config.mySideOverride = UserSideChoice.encode(red)
+        mySideLockedRed = red
+        resetSuggestionState()
+        val text = if (red) "红" else "黑"
+        VoiceDiag.log(this, "我方选择",
+            "t=${System.currentTimeMillis()} 面板大色块点选：我方=$text（互斥锁定·跨对局保持）旧=" +
             (old?.let { if (it) "红" else "黑" } ?: "跟随识别") +
             " → 新=$text；后续所有点按均按${text}方支招")
         setStatus("我方已锁定为${text}方\n点棋盘即按${text}方支招")

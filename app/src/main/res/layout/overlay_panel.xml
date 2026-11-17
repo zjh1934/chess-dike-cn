@@ -188,20 +188,20 @@
             android:text="时间 —"
             android:visibility="gone" />
 
-        <!-- v1.13：原「哈希」芯片改为「我方 红/黑」互斥按钮（不在设置页）。
-             哈希档位保持默认 256MB，不再可点。点击后跨对局保持手动锁定的颜色。 -->
+        <!-- v1.22：原「我方」芯片 + 「引擎」芯片合并为红/黑两个大方块。
+             识别引擎固定 YOLO，不再有第二个选项需要展示；点哪个色块就锁定为我方，
+             选中态实心高亮 + ✓，互斥（选红就不可能同时是黑），跨对局保持。 -->
         <TextView
-            android:id="@+id/overlay_btn_my_side"
-            style="@style/OverlayChip"
+            android:id="@+id/overlay_btn_side_red"
+            style="@style/OverlaySideBlock"
             android:layout_marginTop="2dp"
-            android:text="我方 —" />
+            android:text="红方" />
 
-        <!-- 引擎芯片（可点）：显示当前识别引擎（ONNX/YOLO），点击热切换并重新确认 -->
         <TextView
-            android:id="@+id/overlay_btn_engine"
-            style="@style/OverlayChip"
-            android:layout_marginTop="2dp"
-            android:text="引擎 —" />
+            android:id="@+id/overlay_btn_side_black"
+            style="@style/OverlaySideBlock"
+            android:layout_marginTop="3dp"
+            android:text="黑方" />
 
         <TextView
             android:id="@+id/overlay_btn_turn"

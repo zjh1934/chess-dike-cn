@@ -380,9 +380,10 @@ class TapChainTest {
         assertTrue("绑定断开时必须走全局兜底，否则按钮按了没效果", v.ok)
         assertEquals("全局兜底", v.source)
         assertTrue(CaptureStopGate.resolve(true, false, true).ok)
-        assertFalse(CaptureStopGate.resolve(false, false, true).ok)
-        assertFalse(CaptureStopGate.resolve(true, true, false).ok)
-        report("一键关闭录屏：Activity 绑定断开时由 activeService 兜底，按钮始终可点并写诊断")
+        // v1.22：不再因「无引用 / 录屏未运行」提前 return，一律执行停止
+        assertTrue("无引用也照常执行停止", CaptureStopGate.resolve(false, false, true).ok)
+        assertTrue("录屏状态未运行也照常执行停止", CaptureStopGate.resolve(true, true, false).ok)
+        report("一键关闭共享屏幕：一律执行停止（收面板 + mediaProjection.stop + stopService 兜底），不再被状态判定拦住")
     }
 
     @Test
@@ -438,7 +439,8 @@ class TapChainTest {
         }
         val panel = readSrc("app/src/main/res/layout/overlay_panel.xml")
         assertTrue("必须读到面板布局", panel.isNotEmpty())
-        assertTrue("面板里必须有我方按钮", panel.contains("overlay_btn_my_side"))
+        assertTrue("面板里必须有红方大色块", panel.contains("overlay_btn_side_red"))
+        assertTrue("面板里必须有黑方大色块", panel.contains("overlay_btn_side_black"))
         assertFalse("面板里不该再有哈希切换按钮", panel.contains("overlay_btn_hash"))
         val act = readSrc("app/src/main/java/com/xqdk/chess/assist/ui/AssistActivity.kt")
         assertTrue("必须读到连线页源码", act.isNotEmpty())
@@ -906,10 +908,10 @@ class TapChainTest {
         }
         val svc = readSrc("app/src/main/java/com/xqdk/chess/assist/ScreenAssistService.kt")
         assertTrue("必须读到服务源码", svc.isNotEmpty())
-        // 3 帧确认接线
-        assertTrue("主链路接入 3 帧确认", svc.contains("TapConfirm3.feed(tapConfirmState, r.canonical)"))
-        assertTrue("子数跳变门限接线", svc.contains("TapConfirm3.pieceJumpPlausible(currentCanonical, r.canonical)"))
-        assertTrue("抓帧窗口放宽到 8 帧", svc.contains("TAP_CAPTURE_RETRY_MAX = 8"))
+        // v1.22：点按档回到单帧直出（原作者 3 帧确认只用于常开档）
+        assertFalse("主链路不再跨帧比对", svc.contains("TapConfirm3.feed"))
+        assertTrue("单帧合法直接建局", svc.contains("applyTapDirectBoard(r)"))
+        assertTrue("只在单帧不合法时才重试最多 3 帧", svc.contains("TAP_CAPTURE_RETRY_MAX = 3"))
         assertTrue("硬预算 3s", svc.contains("TAP_HARD_SPEAK_MS = 3000L"))
         // 只念本轮 bestmove
         assertTrue("成熟度只认 searchSettled", svc.contains("suggestMature = searchSettled"))
@@ -927,7 +929,7 @@ class TapChainTest {
         assertFalse("小票不再用箭头时刻冒充播报", svc.contains("tapSuggestShownTs - tapSessionStartTs"))
         assertTrue("硬预算如实写未定着", svc.contains("硬预算·未定着"))
         assertTrue("质量来源写本轮定着", svc.contains("本轮定着✓（bestmove）"))
-        report("点一下 → 连续 3 帧确认 → 只在我方回合发一次完整搜索 → 本轮 bestmove 才念；预判与对方阵营计算全删")
+        report("点一下 → 单帧直出 → 只在我方回合发一次完整搜索 → 本轮 bestmove 才念；预判与对方阵营计算全删")
     }
 
     @Test
@@ -945,6 +947,76 @@ class TapChainTest {
         assertEquals(TapSpeakGate.Decision.WAIT,
             TapSpeakGate.decide(false, false, true, "建议 车二进四 ✓", true, mature = true))
         report("只念本轮定着/开局库；3s 硬预算由服务层强制定着并如实标注，绝不静默")
+    }
+
+    @Test
+    fun `v1_22 点按档单帧直出 不再为凑3帧反复重提交画面`() {
+        fun readSrc(rel: String): String {
+            for (c in listOf(rel, rel.removePrefix("app/"), "../" + rel)) {
+                val f = java.io.File(c); if (f.exists()) return f.readText()
+            }
+            return ""
+        }
+        val svc = readSrc("app/src/main/java/com/xqdk/chess/assist/ScreenAssistService.kt")
+        assertTrue("必须读到服务源码", svc.isNotEmpty())
+        // 11:44 日志：9 次点按 / 65 帧全合法 / 全是「第 1/3 帧一致」/ 9 次全失败
+        assertFalse("不再有 3 帧硬门槛", svc.contains("confirmVerdict.accept"))
+        assertFalse("不再有凑不齐就收场的分支", svc.contains("未凑齐${TapConfirm3.REQUIRED}帧一致"))
+        assertTrue("点按档单帧直出说明在", svc.contains("点按档单帧直出"))
+        assertTrue("不跨帧比对", svc.contains("不跨帧比对"))
+        assertTrue("单帧不合法才重试", svc.contains("TAP_CAPTURE_RETRY_MAX = 3"))
+        // 原作者 3 帧确认器留档但不阻塞点按档
+        val c = readSrc("app/src/main/java/com/xqdk/chess/assist/TapConfirm3.kt")
+        assertEquals(3, TapConfirm3.REQUIRED)
+        assertTrue("确认器仍保留原作者门限", c.contains("pieceJumpPlausible"))
+        report("9 次点按 9 次失败的根因是反复 setSurface+resize 造出 A/B 两套画面；改回单帧直出，认准放在帧内")
+    }
+
+    @Test
+    fun `v1_22 一键关闭共享屏幕 一律执行停止`() {
+        fun readSrc(rel: String): String {
+            for (c in listOf(rel, rel.removePrefix("app/"), "../" + rel)) {
+                val f = java.io.File(c); if (f.exists()) return f.readText()
+            }
+            return ""
+        }
+        val act = readSrc("app/src/main/java/com/xqdk/chess/assist/ui/AssistActivity.kt")
+        val gate = readSrc("app/src/main/java/com/xqdk/chess/assist/CaptureStopGate.kt")
+        assertTrue("必须读到连线页源码", act.isNotEmpty())
+        assertFalse("不再有提前 return 拦截", act.contains("if (!verdict.ok)"))
+        assertTrue("一律写录屏停止诊断", act.contains("主页一键关闭共享屏幕：点击"))
+        assertTrue("服务引用在就完整收场", act.contains("stopGuidance(\"主页一键关闭共享屏幕\")"))
+        assertTrue("引用不在也发停止意图兜底", act.contains("stopService(Intent(this, ScreenAssistService::class.java))"))
+        assertTrue("门禁永远放行", gate.contains("return Verdict(true, source, hint)"))
+        assertTrue(CaptureStopGate.resolve(false, false, false).ok)
+        report("按了就停：不检查 isCapturing、不依赖服务引用，stopService 触发 onDestroy→releaseCapture 兜底")
+    }
+
+    @Test
+    fun `v1_22 红黑大方块互斥 引擎芯片已合并`() {
+        fun readSrc(rel: String): String {
+            for (c in listOf(rel, rel.removePrefix("app/"), "../" + rel)) {
+                val f = java.io.File(c); if (f.exists()) return f.readText()
+            }
+            return ""
+        }
+        val xml = readSrc("app/src/main/res/layout/overlay_panel.xml")
+        val view = readSrc("app/src/main/java/com/xqdk/chess/assist/ui/OverlayPanelView.kt")
+        val svc = readSrc("app/src/main/java/com/xqdk/chess/assist/ScreenAssistService.kt")
+        assertTrue("必须读到面板布局", xml.isNotEmpty())
+        assertTrue("红方大方块", xml.contains("overlay_btn_side_red") && xml.contains("OverlaySideBlock"))
+        assertTrue("黑方大方块", xml.contains("overlay_btn_side_black"))
+        assertFalse("引擎芯片已删除", xml.contains("overlay_btn_engine"))
+        assertFalse("旧我方小芯片已删除", xml.contains("overlay_btn_my_side"))
+        assertTrue("两个色块直选 action", view.contains("SET_MY_SIDE_RED") && view.contains("SET_MY_SIDE_BLACK"))
+        assertTrue("互斥由单一布尔驱动", view.contains("paintSideBlocks(model.mySideIsRed)") &&
+            view.contains("paintSideBlock(btnSideBlack, !myRed, false)"))
+        assertTrue("选中态实心高亮", view.contains("selected && red -> 0xE6C35440") && view.contains("\" ✓\""))
+        assertTrue("服务处理红块", svc.contains("OverlayAction.SET_MY_SIDE_RED -> setMySide(true)"))
+        assertTrue("服务处理黑块", svc.contains("OverlayAction.SET_MY_SIDE_BLACK -> setMySide(false)"))
+        assertTrue("跨对局锁定", svc.contains("互斥锁定·跨对局保持"))
+        assertFalse("连线页仍无我方选择入口", readSrc("app/src/main/java/com/xqdk/chess/assist/ui/AssistActivity.kt").contains("mySideOverride"))
+        report("引擎固定 YOLO → 引擎芯片删掉；红/黑两个 34dp 大方块直选、互斥、选中高亮✓，跨对局保持")
     }
 
 }
