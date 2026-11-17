@@ -703,7 +703,7 @@ class TapChainTest {
             return ""
         }
         val mapper = readSrc("app/src/main/java/com/xqdk/chess/assist/DetectionBoardMapper.kt")
-        assertTrue("映射层必须接入逐类裁剪", mapper.contains("PieceLimitTrim.trim(cells, cellScore"))
+        assertTrue("映射层必须接入逐类裁剪", mapper.contains("PieceLimitTrim.trim(cells, cellScore, prevRaw)"))
         assertTrue("MappedBoard 要带裁剪明细", mapper.contains("val trimDetail: String"))
         val svc = readSrc("app/src/main/java/com/xqdk/chess/assist/ScreenAssistService.kt")
         assertTrue("必须读到服务源码", svc.isNotEmpty())
@@ -711,14 +711,14 @@ class TapChainTest {
         assertFalse("主链路不能再有 TapFrameConsensus.decide",
             svc.contains("TapFrameConsensus.decide"))
         assertFalse("主链路不能再有 TapBoardStep.check", svc.contains("TapBoardStep.check"))
-        assertTrue("合法帧直接建局", svc.contains("applyTapDirectBoard(r)"))
+        assertTrue("确认后才建局", svc.contains("applyTapDirectBoard(r)"))
         // 点击瞬间擦旧箭头
         assertTrue("点击瞬间清掉旧建议", svc.contains("resetSuggestionState()") &&
             svc.contains("旧建议已擦除"))
         assertTrue("④箭头必须等本轮建局后才算数",
             svc.contains("tapSessionActive && tapSessionAwaitSettle"))
         // 硬预算 + 失败必有声音
-        assertTrue("2.5s 硬预算", svc.contains("TAP_HARD_SPEAK_MS = 2500L") &&
+        assertTrue("3s 硬预算（v1.21 给完整搜索留时间）", svc.contains("TAP_HARD_SPEAK_MS = 3000L") &&
             svc.contains("private fun onTapHardSpeakTimeout"))
         assertTrue("失败收场不静默", svc.contains("endTapSessionWithVoice") &&
             svc.contains("没看清棋盘，再点一次"))
@@ -782,10 +782,10 @@ class TapChainTest {
         assertEquals(TapSpeakGate.Decision.WAIT,
             TapSpeakGate.decide(true, false, true, "建议 炮2平1 (b7a7)（暂定）", true,
                 mature = false, pvDepth = 4, elapsedMs = 1100L, qualityWindowMs = 1000L))
-        // 窗口到点且深度爬够 → 念（仍是 2.5s 硬预算之内）
-        assertEquals(TapSpeakGate.Decision.SPEAK,
+        // v1.21：按原作者口径收紧 —— 没等到本轮 bestmove，PV 再深也不念
+        assertEquals(TapSpeakGate.Decision.WAIT,
             TapSpeakGate.decide(true, false, true, "建议 炮2平1 (b7a7)（暂定）", true,
-                mature = false, pvDepth = 12, elapsedMs = 1050L, qualityWindowMs = 1000L))
+                mature = false, pvDepth = 20, elapsedMs = 3000L, qualityWindowMs = 1000L))
         // 横跳防线 / 会外残留 / 状态文案仍然有效
         assertEquals(TapSpeakGate.Decision.WAIT,
             TapSpeakGate.decide(true, true, true, "建议 马8进9 (h9g7) ✓", true, mature = true))
@@ -793,7 +793,7 @@ class TapChainTest {
             TapSpeakGate.decide(false, false, true, "建议 车二进四 (h0h4) ✓", true, mature = true))
         assertEquals(TapSpeakGate.Decision.WAIT,
             TapSpeakGate.decide(true, false, true, "引擎思考中…", true, mature = true))
-        report("招法质量：定着/开局库零等待；浅 PV 等 1s 且 depth≥8 才念；2.5s 硬预算兜底必有声音")
+        report("招法质量：只念本轮 bestmove 定着/开局库；3s 硬预算兜底必有声音（如实写明未定着）")
     }
 
     @Test
@@ -854,7 +854,7 @@ class TapChainTest {
         assertTrue("窗口到点强制重渲染", svc.contains("tapQualityTick") &&
             svc.contains("removeCallbacks(tapQualityTick)"))
         assertTrue("日志写清念的是什么质量的招", svc.contains("招法质量") &&
-            svc.contains("等招算稳=") && svc.contains("较深PV"))
+            svc.contains("等招算稳=") && svc.contains("本轮定着✓（bestmove）"))
         assertTrue("局面未变重念上一招，不重新浅算", svc.contains("重复点按") &&
             svc.contains("lastTapSpoken") && svc.contains("lastTapFen"))
         // 映射层延续性
@@ -865,6 +865,86 @@ class TapChainTest {
             mp.contains("PieceLimitTrim.trim(cells, cellScore, prevRaw)"))
         assertTrue("服务层把上一局面带进映射", svc.contains("yolo.detect(frame, cropHint(frame), currentCanonical)"))
         report("点一下 → 抓帧（延续性裁剪）→ 建局 → 等定着/较深PV → 念一次；局面未变重念上一招；日志写明招法来源")
+    }
+
+    @Test
+    fun `v1_21 原作者口径 连续3帧一致才建局`() {
+        val board = Array(AssistBoard.H) { y -> IntArray(AssistBoard.W) { x ->
+            if ((x + y) % 4 == 0) Piece.WMA else Piece.EMPTY } }
+        val other = AssistBoard.clone(board)
+        other[3][3] = Piece.BZU
+        var st = TapConfirm3.State()
+        val (s1, v1) = TapConfirm3.feed(st, board)
+        assertFalse("第 1 帧不能确认", v1.accept); assertEquals(1, v1.hits); st = s1
+        val (s2, v2) = TapConfirm3.feed(st, board)
+        assertFalse("第 2 帧仍不能确认", v2.accept); assertEquals(2, v2.hits); st = s2
+        val (s3, v3) = TapConfirm3.feed(st, board)
+        assertTrue("连续第 3 帧一致才确认（原作者 confirmCount=3）", v3.accept)
+        assertEquals(3, v3.hits); st = s3
+        // 中间插一帧不同局面 → 累计清零，不能凑数
+        val (s4, v4) = TapConfirm3.feed(st, other)
+        assertFalse("局面变了要重新累计", v4.accept); assertEquals(1, v4.hits); st = s4
+        val (_, v5) = TapConfirm3.feed(st, board)
+        assertFalse("坏帧打断后仍要满 3 帧", v5.accept); assertEquals(1, v5.hits)
+        // 子数跳变门限：真实走子只 ±1，±3 的过渡帧不进累计
+        val big = Array(AssistBoard.H) { IntArray(AssistBoard.W) }
+        for (y in 0..5) big[y][0] = Piece.BZU
+        assertTrue("首次无上一局面放行", TapConfirm3.pieceJumpPlausible(null, big))
+        assertFalse("子数跳变过大判为动画/遮挡", TapConfirm3.pieceJumpPlausible(board, big))
+        assertEquals(3, TapConfirm3.REQUIRED)
+        report("识别对齐原作者：连续 3 帧逐格一致 + 子数跳变门限；不查节拍器由服务层保证")
+    }
+
+    @Test
+    fun `v1_21 只念本轮定着 不念预判不算对方阵营`() {
+        fun readSrc(rel: String): String {
+            for (candidate in listOf(rel, rel.removePrefix("app/"), "../" + rel)) {
+                val f = java.io.File(candidate)
+                if (f.exists()) return f.readText()
+            }
+            return ""
+        }
+        val svc = readSrc("app/src/main/java/com/xqdk/chess/assist/ScreenAssistService.kt")
+        assertTrue("必须读到服务源码", svc.isNotEmpty())
+        // 3 帧确认接线
+        assertTrue("主链路接入 3 帧确认", svc.contains("TapConfirm3.feed(tapConfirmState, r.canonical)"))
+        assertTrue("子数跳变门限接线", svc.contains("TapConfirm3.pieceJumpPlausible(currentCanonical, r.canonical)"))
+        assertTrue("抓帧窗口放宽到 8 帧", svc.contains("TAP_CAPTURE_RETRY_MAX = 8"))
+        assertTrue("硬预算 3s", svc.contains("TAP_HARD_SPEAK_MS = 3000L"))
+        // 只念本轮 bestmove
+        assertTrue("成熟度只认 searchSettled", svc.contains("suggestMature = searchSettled"))
+        assertTrue("本轮定着守卫", svc.contains("val isThisRound = tapSearchRequested") &&
+            svc.contains("不让上一局结果冒充定着"))
+        // 不想要的两种计算全删
+        assertFalse("不再查预判缓存", svc.contains("ponderCache.pick(fen)"))
+        assertFalse("不再喂预判缓存", svc.contains("ponderCache.feed(result.fen, result)"))
+        assertFalse("不再记对方回合预案 FEN", svc.contains("if (!myTurn && precomputeEnabled) lastPreFen = fen"))
+        assertTrue("对方回合不发引擎搜索", svc.contains("轮到对方 → 不发起引擎搜索"))
+        assertTrue("预案行留空", svc.contains("用户明确不要「若对方走X 我方应Y」这类预判计算/显示"))
+        assertTrue("预计算固定关闭", svc.contains("private var precomputeEnabled = false"))
+        // 日志不再冒功
+        assertTrue("小票用真实点击→播报", svc.contains("tapSpeakTs - tapSessionStartTs"))
+        assertFalse("小票不再用箭头时刻冒充播报", svc.contains("tapSuggestShownTs - tapSessionStartTs"))
+        assertTrue("硬预算如实写未定着", svc.contains("硬预算·未定着"))
+        assertTrue("质量来源写本轮定着", svc.contains("本轮定着✓（bestmove）"))
+        report("点一下 → 连续 3 帧确认 → 只在我方回合发一次完整搜索 → 本轮 bestmove 才念；预判与对方阵营计算全删")
+    }
+
+    @Test
+    fun `v1_21 播报门控 非定着一律不念`() {
+        assertEquals(TapSpeakGate.Decision.SPEAK,
+            TapSpeakGate.decide(true, false, true, "建议 车二进八 (h1h9) ✓", true,
+                mature = true, pvDepth = 20, elapsedMs = 100L))
+        assertEquals(TapSpeakGate.Decision.WAIT,
+            TapSpeakGate.decide(true, false, true, "建议 炮2平1 (b7a7)（暂定）", true,
+                mature = false, pvDepth = 20, elapsedMs = 2900L))
+        assertEquals(TapSpeakGate.Decision.MUTED,
+            TapSpeakGate.decide(true, false, true, "开局库 炮二平五 ✓", false, mature = true))
+        assertEquals(TapSpeakGate.Decision.WAIT,
+            TapSpeakGate.decide(true, true, true, "建议 马8进9 ✓", true, mature = true))
+        assertEquals(TapSpeakGate.Decision.WAIT,
+            TapSpeakGate.decide(false, false, true, "建议 车二进四 ✓", true, mature = true))
+        report("只念本轮定着/开局库；3s 硬预算由服务层强制定着并如实标注，绝不静默")
     }
 
 }

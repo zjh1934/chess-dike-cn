@@ -38,11 +38,11 @@ package com.xqdk.chess.assist
  *
  * 现在回到「等招算稳」，但不退回秒级干等：
  * - **定着 / 开局库 / 预判命中**（`mature=true`）→ 立刻念，零等待、最可信
- * - 否则等一个**短质量窗口**（默认 1000ms），且当前 PV 深度 ≥ [MIN_PV_DEPTH]
- *   才念 —— 这时已经是深得多的着法
- * - 窗口内还没达标继续 WAIT；2.5s 硬预算由服务层兜底，绝不静默
+ * - v1.21 改回原作者口径：**只念本轮完整搜索结束（bestmove）后的定着✓**，
+ *   中间 info 行的暂定 PV 一律不念；开局库命中也念（库着即定着）
+ * - 3s 硬预算由服务层兜底，绝不静默（日志会写明「硬预算·未定着」）
  *
- * 用户要的「最多两三秒出声」仍然成立：定着常在 1~2 秒到；最差 2.5 秒硬预算。
+ * 用户要的「最多两三秒出声」仍成立：完整搜索通常 1~2 秒；最差 3 秒硬预算。
  *
  * ## 门控口径
  *
@@ -62,7 +62,8 @@ object TapSpeakGate {
         WAIT,
     }
 
-    /** 短质量窗口内，PV 至少要爬到这个深度才值得念（第一条 info 通常 1~4 层）。 */
+    /** v1.20 曾用：短质量窗口内 PV 深度门槛。v1.21 起不再截念暂定 PV（用户要求
+     *  「按原作者的来，他计算几次咱就计算几次」），只认本轮完整搜索的 bestmove。 */
     const val MIN_PV_DEPTH = 8
     const val DEFAULT_QUALITY_WINDOW_MS = 1000L
 
@@ -85,8 +86,10 @@ object TapSpeakGate {
         if (!suggestionReady) return Decision.WAIT
         val t = text ?: return Decision.WAIT
         if (!isSuggestion(t)) return Decision.WAIT
-        val qualityOk = mature || (elapsedMs >= qualityWindowMs && pvDepth >= MIN_PV_DEPTH)
-        if (!qualityOk) return Decision.WAIT
+        // v1.21：只念「本轮这一局面完整跑完一次搜索」的 bestmove 定着✓ / 开局库。
+        // 不再用 1 秒窗口 + 深≥8 截住念暂定 PV —— 那仍是没算完的着法。
+        // 2.5s（本版 3s）硬预算由服务层兜底，绝不静默。
+        if (!mature) return Decision.WAIT
         return if (voiceEnabled) Decision.SPEAK else Decision.MUTED
     }
 
