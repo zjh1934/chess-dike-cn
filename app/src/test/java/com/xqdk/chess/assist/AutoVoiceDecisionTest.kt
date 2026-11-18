@@ -107,21 +107,23 @@ class AutoVoiceDecisionTest {
             assertFalse("瞎改组件仍在：$gone", joined.contains(gone))
         }
 
-        // 唯一语音增量的接线：4 个定着入口 + 生命周期 + 去重 + 决策
+        // 唯一语音增量的接线：v1.27 起 4 个朗读入口 + 生命周期 + 去重 + 决策
         assertTrue("语音组件存在", voice.contains("class AutoVoice") && voice.contains("object AutoVoiceDecision"))
         for (mark in listOf("autoVoice = AutoVoice(this)", "autoVoice?.shutdown()",
             "autoVoice?.onNewPosition()", "lastVoiceKey = null",
             "fun voiceOnSettled", "AutoVoiceDecision.decide")) {
             assertTrue("接线缺失：$mark", svc.contains(mark))
         }
-        assertEquals("定着入口恰好 3 处（引擎/开局库/预判命中）",
-            3, svc.split("voiceOnSettled").size - 1 - 1) // 减掉函数定义本身
+        // v1.27：新增 renderOverlay「建议成熟即念」，调用点由 3 处变 4 处
+        // （onSearchDone 定着 / 开局库命中 / 预判命中 / 成熟即念），另 1 处是函数定义。
+        assertEquals("朗读入口恰好 4 处（定着/开局库/预判/成熟即念）",
+            4, svc.split("voiceOnSettled").size - 1 - 1) // 减掉函数定义本身
         val iUpdate = svc.indexOf("override fun onSearchUpdate")
         val iDone = svc.indexOf("override fun onSearchDone")
         assertTrue("上游回调都在", iUpdate > 0 && iDone > iUpdate)
         assertFalse("暂定 PV 的 onSearchUpdate 段不得触发朗读",
             svc.substring(iUpdate, iDone).contains("voiceOnSettled"))
-        assertTrue("只在本轮搜索完整结束（onSearchDone）时朗读",
+        assertTrue("onSearchDone 定着仍会触发朗读（与成熟即念靠按局面去重，不重复念）",
             svc.substring(iDone, minOf(svc.length, iDone + 1200)).contains("voiceOnSettled"))
         assertTrue("AndroidManifest 声明 TTS 包可见性", manifest.contains("android.intent.action.TTS_SERVICE"))
         assertTrue("CI 自检改为上游核心+语音", ci.contains("AutoVoiceDecisionTest") &&
