@@ -14,7 +14,6 @@ import android.view.WindowManager
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.xqdk.chess.R
-import com.xqdk.chess.assist.TapMode
 import kotlin.math.abs
 import kotlin.math.max
 
@@ -38,7 +37,7 @@ class OverlayModel(
     val occludedText: String? = null,
     /** 主状态大字：轮到我方走 / 已停止指导 / 引擎异常…（含 setStatus 覆盖文案） */
     val headlineText: String = "识别中",
-    /** 优势行：红方优势 +0.8 / 胜率约 4%；null 隐藏 */
+    /** 优势行：红方优势 2.60 / 红方劣势 M3（方向由标签承担、数值恒正）；null 隐藏 */
     val advantageText: String? = null,
     val advantageTone: QiTone = QiTone.NONE,
     /** 候选/预案行：建议 炮二平五 ✓ / 若对方走X 我方应Y；null 隐藏 */
@@ -68,10 +67,8 @@ class OverlayModel(
     /** 时间制时长档值（"3s"，时间制显示）；深度制下为 null → 时间芯片隐藏。
      *  与 [depthText] 互斥（连线页思考制式决定，二者至多一个非 null） */
     val timeText: String? = null,
-    /** v1.13：我方颜色（"红"/"黑"），显示在原「哈希」按钮位置 */
-    val mySideText: String = "红",
-    /** true = 用户在悬浮面板上手动锁定（按钮显示「我方✓」） */
-    val mySideLocked: Boolean = false,
+    /** 引擎 Hash 档值（"256"） */
+    val hashText: String? = null,
     /** 识别引擎档值（"ONNX"/"YOLO"）；null = 显示弱化占位 */
     val engineText: String? = null,
     /** 引擎变招路数（MultiPV 1-3）：左列档位按钮文字 "N变"（默认 1 路算力最全） */
@@ -85,16 +82,14 @@ enum class OverlayAction {
     CLOSE,
     /** 切换候选着法（变招） */
     CYCLE_CANDIDATE,
+    /** 单次三变解析（双击小棋盘：临时 MultiPV=3 重搜当前局面，常规档不变） */
+    TRIPLE_ANALYSIS,
     /** 悔棋：回退到上一个已确认局面 */
     UNDO,
     /** 引擎深度档切换（固定深度循环） */
     CYCLE_STRENGTH,
-    /** v1.13 我方 红/黑 互斥切换（保留兼容）；v1.22 面板改两个大方块直选 */
-    TOGGLE_MY_SIDE,
-    /** v1.22 红方大色块：点一下直接锁定我方=红 */
-    SET_MY_SIDE_RED,
-    /** v1.22 黑方大色块：点一下直接锁定我方=黑 */
-    SET_MY_SIDE_BLACK,
+    /** 引擎 Hash 档循环（256→512→1024→2048，与对弈设置同口径） */
+    CYCLE_HASH,
     /** 更新棋局（原"轮次"）：翻转"我方/对方"走子方并按新轮次重建/重分析 */
     FLIP_TURN,
     /** 紧急手动模式开关：识别失效时在小棋盘上手工维护局面 */
@@ -107,8 +102,6 @@ enum class OverlayAction {
     CYCLE_TIME,
     /** 闪电出着：打断当前搜索，立即采纳当前最优（引擎空闲时 no-op） */
     FLASH_STOP,
-    /** v1.5 点按出招：点棋盘启动一轮识别→推理→支招（不点棋盘时全流程静止） */
-    TAP_SUGGEST,
 }
 
 class OverlayPanelView @JvmOverloads constructor(
@@ -128,8 +121,8 @@ class OverlayPanelView @JvmOverloads constructor(
     private val btnClose: TextView
     private val btnStrength: TextView
     private val btnTime: TextView
-    private val btnSideRed: TextView
-    private val btnSideBlack: TextView
+    private val btnHash: TextView
+    private val btnEngine: TextView
     private val btnChange: TextView
     private val btnMultiPv: TextView
     private val btnUndo: TextView
@@ -170,16 +163,6 @@ class OverlayPanelView @JvmOverloads constructor(
     private var lastMultiPv = -1
 
     var onAction: ((OverlayAction) -> Unit)? = null
-    /**
-     * 「自动识别」档下点棋盘做什么（v1.3 起默认开 = 点按刷新，关 = 点按变招）。
-     * 前三档由 [tapMode] 直接决定，不读此项；由 ScreenAssistService 每次 render 现读回填。
-     */
-    var quickRefreshEnabled: Boolean = true
-    /**
-     * 「识别方式」四选一（v1.5，默认「点按出招」）：见 [TapMode]。
-     * 由 ScreenAssistService 每次 render 现读配置回填，设置页热改即时生效。
-     */
-    var tapMode: String = TapMode.DEFAULT
     /** 手动模式：小棋盘点格（canonical x,y），由服务端处理选子/走子/删子 */
     var onCellTap: ((x: Int, y: Int) -> Unit)? = null
     /** 拖动开始/结束（遮挡黄字拖动豁免等） */
@@ -222,8 +205,8 @@ class OverlayPanelView @JvmOverloads constructor(
         btnClose = findViewById(R.id.overlay_btn_close)
         btnStrength = findViewById(R.id.overlay_btn_strength)
         btnTime = findViewById(R.id.overlay_btn_time)
-        btnSideRed = findViewById(R.id.overlay_btn_side_red)
-        btnSideBlack = findViewById(R.id.overlay_btn_side_black)
+        btnHash = findViewById(R.id.overlay_btn_hash)
+        btnEngine = findViewById(R.id.overlay_btn_engine)
         btnChange = findViewById(R.id.overlay_btn_change)
         btnMultiPv = findViewById(R.id.overlay_btn_multipv)
         btnUndo = findViewById(R.id.overlay_btn_undo)
@@ -239,8 +222,8 @@ class OverlayPanelView @JvmOverloads constructor(
         btnTurn.setOnClickListener { onAction?.invoke(OverlayAction.FLIP_TURN) }
         btnStrength.setOnClickListener { onAction?.invoke(OverlayAction.CYCLE_STRENGTH) }
         btnTime.setOnClickListener { onAction?.invoke(OverlayAction.CYCLE_TIME) }
-        btnSideRed.setOnClickListener { onAction?.invoke(OverlayAction.SET_MY_SIDE_RED) }
-        btnSideBlack.setOnClickListener { onAction?.invoke(OverlayAction.SET_MY_SIDE_BLACK) }
+        btnHash.setOnClickListener { onAction?.invoke(OverlayAction.CYCLE_HASH) }
+        btnEngine.setOnClickListener { onAction?.invoke(OverlayAction.CYCLE_ENGINE) }
         btnMultiPv.setOnClickListener { onAction?.invoke(OverlayAction.CYCLE_MULTIPV) }
         btnFlash.setOnClickListener { onAction?.invoke(OverlayAction.FLASH_STOP) }
         btnClose.setOnClickListener {
@@ -255,16 +238,8 @@ class OverlayPanelView @JvmOverloads constructor(
                 onAction?.invoke(OverlayAction.CLOSE)
             }
         }
-        chess.onNextCandidate = {
-            // v1.5「识别方式」四选一：点按出招 / 点按刷新 / 点按变招 / 自动识别。
-            // manualMode 的点格在 OverlayChessView 内部已截胡，不会走到这里。
-            when (TapMode.resolveAction(tapMode, chess.manualMode, quickRefreshEnabled)) {
-                TapMode.Action.RECOGNIZE -> onAction?.invoke(OverlayAction.TAP_SUGGEST)
-                TapMode.Action.REFRESH -> onAction?.invoke(OverlayAction.FLIP_TURN)
-                TapMode.Action.CANDIDATE -> onAction?.invoke(OverlayAction.CYCLE_CANDIDATE)
-                TapMode.Action.NONE -> Unit
-            }
-        }
+        chess.onNextCandidate = { onAction?.invoke(OverlayAction.CYCLE_CANDIDATE) }
+        chess.onTripleAnalysis = { onAction?.invoke(OverlayAction.TRIPLE_ANALYSIS) }
         chess.onCellTap = { x, y -> onCellTap?.invoke(x, y) }
     }
 
@@ -365,8 +340,8 @@ class OverlayPanelView @JvmOverloads constructor(
         btnTime.visibility = if (timeText != null) View.VISIBLE else View.GONE
         setChipText(btnStrength, "深度", depthText)
         setChipText(btnTime, "时间", timeText)
-        // v1.22：引擎芯片合并进来，只剩红/黑两个大方块，选中态实心 + ✓ 一眼可辨。
-        paintSideBlocks(model.mySideIsRed)
+        setChipText(btnHash, "哈希", model.hashText)
+        setChipText(btnEngine, "引擎", model.engineText)
         val pauseText = if (model.paused) "继续" else "停止"
         if (btnPause.text != pauseText) btnPause.text = pauseText
 
@@ -417,9 +392,8 @@ class OverlayPanelView @JvmOverloads constructor(
         // 值芯片（每个 view 各取一份 Drawable 实例，禁止共享）
         btnStrength.background = theme.chipBackground(context)
         btnTime.background = theme.chipBackground(context)
-        // v1.22：红/黑大方块自带选中态底，不套芯片背景；主题切换后强制重绘
-        lastSideRedPainted = null
-        lastModel?.let { paintSideBlocks(it.mySideIsRed) }
+        btnHash.background = theme.chipBackground(context)
+        btnEngine.background = theme.chipBackground(context)
 
         // 动作按钮：停止 = 琥珀警示描边（唯一带语义描边的动作）
         btnPause.background = theme.actionBackground(context, palette.stopStroke, palette.stopStrokePressed)
@@ -462,36 +436,6 @@ class OverlayPanelView @JvmOverloads constructor(
      * 顺修历史 bug：原先按 view.text 纯文本比对，Span 颜色不在比较内——换肤后
      * 文本相同即跳过重设，芯片颜色停留在旧调色板；现由 applyTheme 清缓存兜底。
      */
-    /** v1.22：红/黑大方块选中态。选中=实底 + 白字 + ✓，未选中=弱化描边 + 灰字。
-     *  两个色块互斥由 `model.mySideIsRed` 单一来源保证，不可能同时高亮。 */
-    private var lastSideRedPainted: Boolean? = null
-    private fun paintSideBlocks(myRed: Boolean) {
-        if (lastSideRedPainted == myRed) return
-        lastSideRedPainted = myRed
-        paintSideBlock(btnSideRed, myRed, true)
-        paintSideBlock(btnSideBlack, !myRed, false)
-    }
-    private fun paintSideBlock(view: TextView, selected: Boolean, red: Boolean) {
-        val radius = 8f * resources.displayMetrics.density
-        val fill = when {
-            selected && red -> 0xE6C35440.toInt()
-            selected -> 0xF0212226.toInt()
-            else -> 0x0FFFFFFF
-        }
-        val stroke = when {
-            selected -> 0x00000000
-            red -> 0x66C35440.toInt()
-            else -> 0x66A8ADB6.toInt()
-        }
-        view.background = GradientDrawable().apply {
-            cornerRadius = radius
-            setColor(fill)
-            setStroke((1.2f * resources.displayMetrics.density).toInt().coerceAtLeast(1), stroke)
-        }
-        view.text = (if (red) "红方" else "黑方") + if (selected) " ✓" else ""
-        view.setTextColor(if (selected) 0xFFF7F4EE.toInt() else 0xFFA8ADB6.toInt())
-    }
-
     private fun setChipText(view: TextView, label: String, value: String?) {
         val last = chipCache[view]
         if (last != null && last.first == label && last.second == value) return

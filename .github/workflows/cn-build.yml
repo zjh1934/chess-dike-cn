@@ -11,7 +11,7 @@
 #     用户每次都必须卸载重装；已由 Signing audit 实测确认。）
 #  - 手动触发时由 runner 直接把 APK 挂到 Release 页（不经沙盒中转运大文件）；
 #    用 gh release create 而非推送 v* tag，避免命中 android.yml 的 tags: ["v*"]。
-#    本分支标签统一用 cn- 前缀（如 cn-1.24），天然不命中该规则。
+#    本分支标签统一用 cn- 前缀（如 cn-1.25），天然不命中该规则。
 #
 # 触发：push 到 main（常规开发，仅编译+单测+出 artifact）或手动 workflow_dispatch（发布）。
 name: Build-CN
@@ -33,7 +33,7 @@ on:
         description: 'Release 标签名（cn- 前缀，不以 v 开头，避免触发上游 Build-XQDK 流水线）'
         type: string
         required: false
-        default: 'cn-1.24'
+        default: 'cn-1.25'
 
 permissions:
   contents: write
@@ -98,23 +98,21 @@ jobs:
             exit 1
           fi
 
-      - name: 点棋盘链路自检（打包前必须走通）
-        # 用户要求「打包之前自己过一遍流程：模拟点点击，看它触发了什么、反馈给我什么」。
-        # 跑 TapChainTest（-i 让 println 进日志），把 [点按链路] 每一步回传成 check-run
-        # notice；测试失败 / 报告缺失则本步骤失败，Assemble 不会执行 → 不出坏包。
+      - name: 上游核心与语音自检（打包前必须走通）
+        # v1.25 回到原作者源码，只加语音：跑上游自带的核心单测 + 新增的语音决策
+        # 自检。报告缺失/断言失败则本步骤失败，Assemble 不会执行 → 不出坏包。
         run: |
           set -o pipefail
           bash gradlew :app:testArmv8-dotprodDebugUnitTest \
-            --tests "com.xqdk.chess.assist.TapChainTest" \
-            --no-daemon --console=plain -i 2>&1 | tee /tmp/tap_chain.log
-          if ! grep -q '链路自检通过' /tmp/tap_chain.log; then
-            echo "::error::链路自检报告缺失：TapChainTest 可能没真正执行，禁止出包"
+            --tests "com.xqdk.chess.assist.AssistCoreTest" \
+            --tests "com.xqdk.chess.assist.MoveChineseTest" \
+            --tests "com.xqdk.chess.assist.AutoVoiceDecisionTest" \
+            --no-daemon --console=plain -i 2>&1 | tee /tmp/voice_chain.log
+          if ! grep -q '上游与语音自检通过' /tmp/voice_chain.log; then
+            echo "::error::自检报告缺失：上游核心或语音自检没真正执行，禁止出包"
             exit 1
           fi
-          # v1.12 起：断言逐版累积，head -20 会把新增门禁的回传截掉（v1.12 第一次
-          # 发布只回传 10 条、漏了「单帧合法性门槛 / 一键关录屏兜底」）。放宽到 40，
-          # 保证「打包前自己过一遍」的报告每条都能在 annotations 里核对到。
-          grep '\[点按链路\]' /tmp/tap_chain.log | head -40 | while IFS= read -r line; do
+          grep '\[上游与语音自检\]' /tmp/voice_chain.log | head -40 | while IFS= read -r line; do
             echo "::notice::$line"
           done
 
@@ -176,10 +174,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ inputs.release_tag }}
-          RELEASE_TITLE: '象棋迪克 XQDK · 国内增强版 v1.24'
+          RELEASE_TITLE: '象棋迪克 XQDK · 国内增强版 v1.25'
         run: |
           set -euo pipefail
-          TAG="${RELEASE_TAG:-cn-1.24}"
+          TAG="${RELEASE_TAG:-cn-1.25}"
           echo "发布标签: $TAG"
           echo "产物清单:"
           ls -lh dist/

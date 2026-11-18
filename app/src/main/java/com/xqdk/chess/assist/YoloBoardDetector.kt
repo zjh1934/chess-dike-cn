@@ -59,12 +59,7 @@ class YoloBoardDetector(context: Context) {
     /** detect/close 可能来自不同线程（识别 worker 在途时主线程 onDestroy 调 close），
      *  与 OnnxBoardRecognizer 同制式：全部 @Synchronized 串行，防 use-after-free */
     @Synchronized
-    fun detect(
-        frame: Frame,
-        cropHint: DoubleArray? = null,
-        /** v1.20：上一帧 canonical 局面，传给映射层做延续性裁剪；null = 纯置信度 */
-        prevCanonical: Array<IntArray>? = null,
-    ): DetectionBoardMapper.MappedBoard? {
+    fun detect(frame: Frame, cropHint: DoubleArray? = null): DetectionBoardMapper.MappedBoard? {
         val cx0: Int; val cy0: Int; val cw: Int; val ch: Int
         if (cropHint != null && cropHint[2] - cropHint[0] >= 64 && cropHint[3] - cropHint[1] >= 64) {
             cx0 = max(0, cropHint[0].toInt()); cy0 = max(0, cropHint[1].toInt())
@@ -82,8 +77,7 @@ class YoloBoardDetector(context: Context) {
         // 裁剪坐标 -> 帧坐标
         val shifted = if (cx0 == 0 && cy0 == 0) dets
         else dets.map { YoloDetection(it.labelId, it.score, it.cx + cx0, it.cy + cy0, it.w, it.h) }
-        val mapped = DetectionBoardMapper.map(shifted, frame.width, frame.height,
-            prevCanonical = prevCanonical)
+        val mapped = DetectionBoardMapper.map(shifted, frame.width, frame.height)
         Log.d(TAG, "yolo: infer=${inferMs}ms crop=${cw}x$ch dets=${dets.size} " +
             "pieces=${mapped?.pieceCount ?: 0} avg=${mapped?.avgScore?.let { "%.2f".format(it) }} " +
             "dropped=${mapped?.dropped ?: 0}")

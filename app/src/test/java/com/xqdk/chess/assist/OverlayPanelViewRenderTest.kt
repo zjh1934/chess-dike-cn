@@ -48,7 +48,7 @@ class OverlayPanelViewRenderTest {
             stateKind = OverlayStateKind.RUNNING,
             occludedText = if (occluded) "挡住棋盘，建议移开" else null,
             headlineText = "轮到我方走",
-            advantageText = "红方优势 +0.35 深18",
+            advantageText = "红方优势 0.35 深18",
             advantageTone = QiTone.GOOD,
             candidateText = "开局库 炮二平五 ✓",
             candidateTone = QiTone.GOOD,
@@ -61,8 +61,7 @@ class OverlayPanelViewRenderTest {
             mySideIsRed = true,
             mature = true,
             depthText = "20",
-            mySideText = "红",
-            mySideLocked = true,
+            hashText = "256",
             engineText = "ONNX",
             multiPv = 3,
         ))

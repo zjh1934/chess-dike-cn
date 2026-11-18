@@ -20,18 +20,6 @@
         <item name="android:gravity">center</item>
     </style>
 
-    <!-- 底部文字入口（帮助/关于）：无底无边，12sp 次级灰绿，48dp 触控目标 -->
-    <style name="MainTextButton" parent="">
-        <item name="android:background">@drawable/main_text_btn_bg</item>
-        <item name="backgroundTint">@null</item>
-        <item name="android:textColor">@color/xq_muted</item>
-        <item name="android:textSize">12sp</item>
-        <item name="android:letterSpacing">0.08</item>
-        <item name="android:minWidth">64dp</item>
-        <item name="android:minHeight">48dp</item>
-        <item name="android:gravity">center</item>
-    </style>
-
     <!-- ==== 连线页样式（美学终稿 §3.2 三步授权清单与设置项）==== -->
 
     <!-- 步骤行：卡片面 + 1dp 描边（背景见 step_row_bg），序号圆/胶囊由代码回填状态 -->
@@ -166,18 +154,6 @@
         <item name="android:textSize">11sp</item>
         <item name="android:textColor">@color/qi_muted</item>
         <item name="android:maxLines">1</item>
-    </style>
-
-    <!-- v1.22 红/黑两个大方块（取代「我方」小芯片 + 「引擎」芯片）：34dp 高、
-         13sp 居中，选中态实底由 OverlayPanelView.paintSideBlock 运行时注入 -->
-    <style name="OverlaySideBlock">
-        <item name="android:layout_width">match_parent</item>
-        <item name="android:layout_height">34dp</item>
-        <item name="android:gravity">center</item>
-        <item name="android:textSize">13sp</item>
-        <item name="android:textStyle">bold</item>
-        <item name="android:maxLines">1</item>
-        <item name="android:textColor">@color/qi_ivory</item>
     </style>
 
     <!-- 动作按钮（更新/停止/关闭、变招/悔棋/手动）：1dp 描边，底由主题运行时注入 -->
