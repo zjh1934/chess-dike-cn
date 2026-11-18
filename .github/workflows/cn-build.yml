@@ -1,9 +1,14 @@
-# 国内增强版专用构建：不依赖官方版权资产，不走官方签名门禁。
+# 国内增强版专用构建：基于原作者 v3.4 源码，只加自动语音。
 #
 # 与上游 Build-XQDK(android.yml) 的区别：
-#  - 不下载 assets Release 里的 ONNX 模型 / 桔库开局库，也不做 sha256 自检。
-#    这些资产受版权保护不随源码分发；缺失时 App 按 README 约定自动降级
-#    （识别回退 YOLO、连线降级纯引擎），不影响编译与基本使用。
+#  - **v1.26 起双识别模型齐备**：上游默认 ONNX（角点+分类两步式），加载失败回退
+#    随包 YOLO。上游发版时会把两个 ONNX 模型从本仓 `assets` 预发布页注入 APK；
+#    本分支 v1.25 漏了这一步，导致一直只有 YOLO。现在由 CI 直接从**上游公开
+#    assets Release**（Silva6c/chess-dike @ tag=assets）下载同名文件注入，
+#    并做 sha256 与出包后「APK 内确有两个模型」双重校验。模型文件仍不进 git
+#    （.gitignore 规则与上游一致），只存在于构建产物与上游公开 Release 上。
+#  - 桔库开局库不注入：上游缺失时连线本来就会自动降级纯引擎模式，不影响使用；
+#    用户这轮只要「两个识别模型」，不把包从 ~92MB 撑到上游的 ~163MB。
 #  - 不注入官方签名密钥；v1.15 起注入**本分支自己的固定 release 密钥**
 #    （Secrets: ANDROID_KEYSTORE_B64 / CCHES_STORE_PWD / CCHES_KEY_PWD），
 #    出包前用 apksigner 比对证书指纹硬门禁，不一致直接失败 —— 保证各版本可覆盖安装。
@@ -11,7 +16,7 @@
 #     用户每次都必须卸载重装；已由 Signing audit 实测确认。）
 #  - 手动触发时由 runner 直接把 APK 挂到 Release 页（不经沙盒中转运大文件）；
 #    用 gh release create 而非推送 v* tag，避免命中 android.yml 的 tags: ["v*"]。
-#    本分支标签统一用 cn- 前缀（如 cn-1.25），天然不命中该规则。
+#    本分支标签统一用 cn- 前缀（如 cn-1.26），天然不命中该规则。
 #
 # 触发：push 到 main（常规开发，仅编译+单测+出 artifact）或手动 workflow_dispatch（发布）。
 name: Build-CN
@@ -33,7 +38,7 @@ on:
         description: 'Release 标签名（cn- 前缀，不以 v 开头，避免触发上游 Build-XQDK 流水线）'
         type: string
         required: false
-        default: 'cn-1.25'
+        default: 'cn-1.26'
 
 permissions:
   contents: write
@@ -84,6 +89,39 @@ jobs:
           keytool -list -keystore app/cchess.release.2026.jks -storepass "$CCHES_STORE_PWD" -alias cchess2026 >/dev/null
           echo "固定 release 钥匙已注入（alias=cchess2026）；私钥不入库、不进日志"
 
+      # v1.26：原作者的两个识别模型都进包。上游 android.yml 用
+      #   gh release download assets --repo "$GITHUB_REPOSITORY" --pattern ...
+      # 从本仓 assets 预发布页注入；本分支直接从上游公开的同名 Release 拉
+      # （runner 在 GitHub 网络内，不受本地沙盒出口策略影响）。
+      - name: 注入原作者双识别模型（ONNX 角点 + 分类）
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_ASSETS_REPO: Silva6c/chess-dike
+        run: |
+          set -euo pipefail
+          mkdir -p app/src/main/assets/models
+          for n in 4_v6-0301.onnx nano_v3-0319.onnx; do
+            if ! gh release download assets --repo "$UPSTREAM_ASSETS_REPO" \
+                --pattern "$n" --dir app/src/main/assets/models --clobber; then
+              echo "gh 下载失败，改走 Release 直链兜底: $n"
+              curl -fsSL --retry 3 \
+                -o "app/src/main/assets/models/$n" \
+                "https://github.com/$UPSTREAM_ASSETS_REPO/releases/download/assets/$n"
+            fi
+          done
+          echo "注入结果："
+          ls -l app/src/main/assets/models/
+
+      - name: 模型完整性自检（sha256 + 字节数）
+        run: |
+          set -euo pipefail
+          cd app/src/main/assets/models
+          echo "fbd895d40ab81b41b8188f881866485678b7871775821aa50cfe74004a1dc796  4_v6-0301.onnx" | sha256sum -c -
+          echo "cb1c1eb93370cb9c6bd65bc8a8b0f5ddc8dbc34cfc83ca902c447960b6ef7e3c  nano_v3-0319.onnx" | sha256sum -c -
+          test "$(stat -c%s 4_v6-0301.onnx)" = 10704184
+          test "$(stat -c%s nano_v3-0319.onnx)" = 10853848
+          echo "两个 ONNX 模型与上游 v3.4 发布资产逐字节一致（共 21,558,032 B）"
+
       - name: Unit tests
         # 失败时把关键错误行回传成 check-run annotations：无需下载被网络策略拦截的
         # 日志 blob，从 GitHub API 就能读到编译/断言失败原因（排障用，长期保留）
@@ -124,6 +162,20 @@ jobs:
           mkdir -p dist
           find app/build/outputs/apk -name "*.apk" -exec cp {} dist/ \;
           ls -lh dist
+
+      # v1.26 硬门禁：用户要「两个模型都要」，光下载不算，必须真进 APK
+      - name: Verify ONNX models packaged
+        run: |
+          set -euo pipefail
+          for f in dist/*.apk; do
+            for n in 4_v6-0301.onnx nano_v3-0319.onnx; do
+              if ! unzip -l "$f" | grep -q "assets/models/$n"; then
+                echo "::error::$f 里没有 assets/models/$n —— 双模型未打进包，禁止发版"
+                exit 1
+              fi
+            done
+            echo "$f → ONNX 角点 + 分类双模型齐备（YOLO 仍随包作回退，共两套识别引擎）"
+          done
 
       # v1.4 包名锁定门禁：任何改动 applicationId 的提交都不得出包
       # （包名一变就是另一个 App，固定签名也没法覆盖升级）
@@ -174,10 +226,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ inputs.release_tag }}
-          RELEASE_TITLE: '象棋迪克 XQDK · 国内增强版 v1.25'
+          RELEASE_TITLE: '象棋迪克 XQDK · 国内增强版 v1.26'
         run: |
           set -euo pipefail
-          TAG="${RELEASE_TAG:-cn-1.25}"
+          TAG="${RELEASE_TAG:-cn-1.26}"
           echo "发布标签: $TAG"
           echo "产物清单:"
           ls -lh dist/

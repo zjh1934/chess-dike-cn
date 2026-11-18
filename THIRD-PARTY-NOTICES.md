@@ -39,8 +39,12 @@
 ## 5. 不随仓库分发的第三方版权内容
 
 - 桔库开局库（`app/src/main/assets/databases/`，.gitignore 排除）：第三方版权内容；
-  缺失时连线自动降级为纯引擎模式。
-- ONNX 识别模型（`app/src/main/assets/models/*.onnx`，.gitignore 排除）：见 §2，自行放置。
+  缺失时连线自动降级为纯引擎模式。本分支 CI 不注入该文件。
+- ONNX 识别模型（`app/src/main/assets/models/*.onnx`，.gitignore 排除）：见 §2，
+  **不进 git**，但 v1.26 起由 `Build-CN` 流水线从上游公开的 `assets` 预发布页
+  （`Silva6c/chess-dike` @ tag `assets`）下载并注入 APK —— 与上游 `android.yml`
+  的发版口径一致（上游 v3.4 APK 亦内置这两个模型）。模型版权归原权利人，
+  本分支不修改、不另行分发源码副本。详见 `assets/models/README.md`。
 
 ## 6. 义务摘要
 

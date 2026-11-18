@@ -131,6 +131,43 @@ class AutoVoiceDecisionTest {
     }
 
     @Test
+    fun `v1_26 双模型注入与出包校验都在`() {
+        fun read(rel: String): String {
+            for (c in listOf(rel, rel.removePrefix("app/"), "../" + rel)) {
+                val f = java.io.File(c); if (f.exists()) return f.readText()
+            }
+            return ""
+        }
+        val ci = read(".github/workflows/cn-build.yml")
+        assertTrue("必须读到 CI 配置", ci.isNotEmpty())
+        assertTrue("CI 从上游公开 assets Release 注入模型",
+            ci.contains("gh release download assets --repo") && ci.contains("Silva6c/chess-dike"))
+        for (n in listOf("4_v6-0301.onnx", "nano_v3-0319.onnx")) {
+            assertTrue("缺少模型 $n 的下载", ci.contains(n))
+        }
+        assertTrue("模型路径与 OnnxBoardRecognizer 一致",
+            ci.contains("app/src/main/assets/models"))
+        assertTrue("sha256 逐字节校验在", ci.contains("sha256sum -c -") &&
+            ci.contains("fbd895d40ab81b41b8188f881866485678b7871775821aa50cfe74004a1dc796") &&
+            ci.contains("cb1c1eb93370cb9c6bd65bc8a8b0f5ddc8dbc34cfc83ca902c447960b6ef7e3c"))
+        assertTrue("出包后硬校验 APK 内真有两个模型",
+            ci.contains("Verify ONNX models packaged") && ci.contains("unzip -l"))
+        assertTrue("直链兜底在（gh 失败时不至于缺件）", ci.contains("curl -fsSL --retry 3"))
+        // 模型文件仍不进 git，与上游 .gitignore 一致
+        val gi = read(".gitignore")
+        assertTrue("模型不进 git 的规则仍在", gi.contains("app/src/main/assets/models/*.onnx"))
+        // 上游代码侧：默认 ONNX 主力、YOLO 回退仍在包里
+        val cfg = read("app/src/main/java/com/xqdk/chess/assist/AssistConfig.kt")
+        val rec = read("app/src/main/java/com/xqdk/chess/assist/OnnxBoardRecognizer.kt")
+        assertTrue("默认识别器仍是 ONNX", cfg.contains("KEY_RECOGNIZER_ENGINE, \"onnx\""))
+        assertTrue("加载的是 assets/models 下这两个文件",
+            rec.contains("models/4_v6-0301.onnx") && rec.contains("models/nano_v3-0319.onnx"))
+        val gradle = read("app/build.gradle.kts")
+        assertTrue("onnxruntime 依赖在", gradle.contains("libs.onnxruntime.android"))
+        report("两套识别引擎齐备：ONNX 角点+分类由 CI 注入 APK（sha256 校验），YOLO 随包回退；不进 git、出包后逐个 APK 校验")
+    }
+
+    @Test
     fun `上游与语音自检通过`() {
         report("上游 3 帧确认 / 自动识别 / 引擎定着 全保留；语音只在定着处自动读一次中文着法")
         println("上游与语音自检通过")

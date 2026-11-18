@@ -1,4 +1,4 @@
-# 象棋迪克 XQDK · 国内增强版 v1.25
+# 象棋迪克 XQDK · 国内增强版 v1.26
 > 本文件是**完整更新说明**（含全部历史版本）。Release 页只放极简摘要 + 折叠要点，避免正文把安装包挤到屏幕下方；摘要模板见 [`docs/RELEASE_BRIEF.md`](RELEASE_BRIEF.md)。
 
 > **本仓库是第三方派生分支，不是官方版本。**
@@ -7,7 +7,54 @@
 > 全部原有代码、设计与文档的著作权归上游作者及贡献者所有，在此致谢；本分支与上游作者无隶属关系，请优先到上游获取正式版本并反馈问题。
 > 上游对接与带日期的同步审计见 [`UPSTREAM.md`](../UPSTREAM.md)；差异化清单见 [`docs/DIFFERENTIATION.md`](DIFFERENTIATION.md)。
 
-源码见 `main`，构建流水线 `Build-CN`，标签 `cn-1.25`。到 [Releases](https://github.com/zjh1934/chess-dike-cn/releases) 自行下载安装包。
+源码见 `main`，构建流水线 `Build-CN`，标签 `cn-1.26`。到 [Releases](https://github.com/zjh1934/chess-dike-cn/releases) 自行下载安装包。
+
+## v1.26 更新内容（两个识别模型都齐了）
+
+### 用户这轮的话
+
+> 「模型两个都要，原作者就是两个模型，我就是自己玩又不是商用。」
+
+**先更正我之前的说法**：我一直在文档里写「ONNX 模型有版权、不随包分发」，不准确。原作者发版时**两个识别模型都在包里** —— 上游 v3.4 的 APK 约 163MB，咱们 v1.25 只有 70MB，差的就是这些资产。准确的说法是：模型文件**不进 git**，但上游 `android.yml` 在构建时用 `gh release download assets` 从本仓 `assets` 预发布页把两个 ONNX 注入 APK。v1.25 把源码换回上游，却漏了这一步，所以一直只有随包的 YOLO（ONNX 加载 0ms 失败 → 回退）。
+
+### 查到的事实
+
+| 项 | 上游 v3.4 |
+| --- | --- |
+| 识别引擎 | **ONNX 两步式（默认主力）** + YOLO 检测式（回退） |
+| 模型文件 | `4_v6-0301.onnx` 10,704,184 B（RTMPose 四角关键点）<br>`nano_v3-0319.onnx` 10,853,848 B（Swin 交叉点 16 类） |
+| 存放 | `app/src/main/assets/models/`，`.gitignore` 排除，不进 git |
+| 发版 | 从本仓 tag=`assets` 的 prerelease Release 下载注入，附 sha256 自检 |
+| 来源 | Hugging Face `yolo12138/Chinese_Chess_Recognition`；上游已把这两个文件**公开发布**在自己的 `assets` Release 上 |
+
+上游 `THIRD-PARTY-NOTICES.md` §5 写的是「不随仓库分发的第三方版权内容」，指的是不进 git 源码仓；上游自己发的 APK 是内置模型的。本分支跟着上游做同一件事。
+
+### 改了什么
+
+- `Build-CN` 新增两步：从**上游公开 `assets` Release**（`Silva6c/chess-dike` @ tag `assets`）下载两个 ONNX 注入 `app/src/main/assets/models/`（`gh` 失败时走 Release 直链兜底）；按上游 `android.yml` 记录的 sha256 与字节数逐项自检
+- 新增出包后硬门禁 `Verify ONNX models packaged`：逐个 APK 用 `unzip -l` 确认 `assets/models/*.onnx` 真在里面，缺一个就不许发版
+- 自检单测新增 1 组：CI 注入步、sha256、APK 校验、直链兜底、`.gitignore` 规则、`AssistConfig` 默认 ONNX、模型路径、`onnxruntime-android` 依赖，逐条断言
+- `assets/models/README.md` 与 `THIRD-PARTY-NOTICES.md` §5 更正口径：不进 git 不变，CI 注入 APK 与上游发版一致
+- **没动软件代码**：上游源码一行没改，`AssistConfig` 默认 `onnx`、模型在就自动用 ONNX，YOLO 仍随包作回退 —— 两套引擎齐备；自动语音不变
+- **没注入桔库开局库**：那不是识别模型，上游缺失时本来就会自动降级纯引擎模式；包体约 92MB，不撑到上游的 163MB
+
+### 关于「自己玩不是商用」，如实说一句
+
+这些模型会打进**公开 Release 页上任何人都能下载**的 APK 里，不是只存在于你手机本地。不过原作者自己就是这么公开分发这两个模型的（他的 `assets` 预发行页和 v3.4 安装包都是公开的），本分支只是按同一口径构建，没有修改模型、没有另存一份源码副本、没有写进 git 历史。如果你只想在本地自己编译自用、不进公开包，说一声我把注入步做成仅本地构建可用即可。
+
+### 提交 CI 前自己检查了什么
+
+- 精确括号扫描、XML/Manifest、CI YAML 解析全过
+- 依赖与加载路径静态核对：`libs.onnxruntime.android`、`AssistConfig` 默认 `onnx`、`OnnxBoardRecognizer` 读 `models/4_v6-0301.onnx` / `models/nano_v3-0319.onnx`、YOLO `.tflite` 随包 —— 都在
+- 注入步与校验步逐条读回 YAML，确认 15 步顺序正确（注入在 assemble 前、APK 校验在 collect 后）
+- ⚠️ 沙盒出口把 `github.com/.../releases/download` 和 `api.github.com/.../releases/assets` 都挡了（403），**模型文件没法在沙盒里下载**；CI 跑在 GitHub 网络上，由它下载并做 sha256 校验。真正结果以 CI 为准
+- 本地无 Android SDK / Java 17，编译与出包由 GitHub CI 执行并核验
+
+### 出包结果
+
+（推送并核验后补）
+
+---
 
 ## v1.25 更新内容（回到原作者源码，只加语音）
 
@@ -41,7 +88,7 @@ v1.4~v1.24 本质是在上游的**常开识别**外面另造了一套「不点�
 
 ### 如实说的几点
 
-- **ONNX 模型有版权、不随包分发**：上游默认识别器是 ONNX，加载失败会自动回退到随包的 YOLO（上游自带逻辑，未改）。这台机器历史上一直走这条回退，能正常用。
+- **ONNX 模型有版权、不随包分发**：上游默认识别器是 ONNX，加载失败会自动回退到随包的 YOLO（上游自带逻辑，未改）。这台机器历史上一直走这条回退，能正常用。**（v1.26 已更正：上游发版时其实会注入两个 ONNX 模型，是 v1.25 漏了这一步；见最上方 v1.26 节）**
 - **功能回退清单**：点棋盘才识别、点后新采帧、红黑大方块、一键关录屏、增强功能诊断导出、所有开关与档位 —— 全部没了，回到上游原本的设置页与交互。
 - **包名与签名没变**：v1.24 直接覆盖安装；从更早版本升上来也不需要卸载（v1.15 起签名已固定）。
 - 这轮没有真机日志，是代码级核对 + CI 核验；装上后若语音没响，看上游诊断日志里的「语音支招」行。
@@ -198,7 +245,7 @@ v1.5~v1.24 各节保留作废弃实验记录，**不再代表当前行为**。
 
 ---
 
-**注意：v1.25 起主体已换回上游源码，下面 v1.5~v1.24 全部是废弃的历史实验记录，不再代表当前行为；当前行为一律以本文最上方 v1.25 节为准。**
+**注意：v1.25 起主体已换回上游源码，v1.26 补齐双模型；下面 v1.5~v1.24 全部是废弃的历史实验记录，不再代表当前行为；当前行为一律以本文最上方 v1.26 节为准。**
 
 ## v1.21 更新内容（回到原作者：3 帧认准棋盘 + 一次完整算完才念）
 
