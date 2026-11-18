@@ -1055,11 +1055,15 @@ class ScreenAssistService : Service() {
             }
             if (!ok) {
                 engineName = ENGINE_YOLO
-                setStatus("ONNX 引擎加载失败\n已回退 YOLO 识别")
+                // v1.27：以前只说「加载失败」，用户连为什么都看不到。模型已在包里，
+                // 若仍失败可导出诊断日志定位（会话创建失败 / 内存 / opset 等）。
+                // 注意：不写回 config.recognizerEngine —— 用户选的 ONNX 保留，下次启动重试。
+                val why = eng.lastLoadError?.take(72) ?: "未知原因"
+                setStatus("ONNX 加载失败：${why.take(30)}\n已临时回退 YOLO 识别")
             }
             diagLog?.appendEvent("ONNX加载",
                 if (ok) "成功，${System.currentTimeMillis() - loadStart}ms"
-                else "失败（${System.currentTimeMillis() - loadStart}ms）→ 回退 YOLO")
+                else "失败（${System.currentTimeMillis() - loadStart}ms）${eng.lastLoadError ?: ""} → 回退 YOLO（用户配置不改写）")
             Log.i(TAG, "onnx engine: ${if (ok) "ready" else "load failed, fallback to yolo"}")
         }.start()
     }
@@ -1133,6 +1137,7 @@ class ScreenAssistService : Service() {
      * 不念分数、不念「建议/✓」、不念对方回合预案、不指挥动对方棋子。
      */
     private fun voiceOnSettled(fen: String, ucci: String?, mature: Boolean) {
+        if (paused || overlayClosed) return
         val voice = autoVoice ?: return
         val myRed = mySideIsRed()
         val myTurn = tracker.redGo == myRed
@@ -1514,6 +1519,7 @@ class ScreenAssistService : Service() {
             OverlayAction.FLIP_TURN -> {
                 // 更新棋局（原"轮次"）：识别差分偶发失败会让 redGo 卡在旧值（显示"轮到对方走"
                 // 而实际轮到我方），一键翻转并按新轮次重建 FEN、重新查库/启动引擎
+                diagLog?.appendEvent("更新棋局", "点小棋盘 → 轮次翻转（原 ${tracker.redGo} → ${!tracker.redGo}）")
                 tracker.redGo = !tracker.redGo
                 resetSuggestionState()
                 val canonical = currentCanonical
@@ -1523,6 +1529,29 @@ class ScreenAssistService : Service() {
                 postRender()
                 scheduleAnalysis()
                 setStatus("棋局已更新\n现${if (tracker.redGo == mySideIsRed()) "轮到我方走" else "轮到对方走"}")
+            }
+            OverlayAction.SIDE_LOCK -> {
+                // v1.27 红黑锁定：自动 → 锁红 → 锁黑 → 自动，三态互斥；
+                // 锁定值持久化，换盘、重启都不变。切换后按新阵营重建建议。
+                val next = when (config.sideLock) {
+                    "auto" -> "red"
+                    "red" -> "black"
+                    else -> "auto"
+                }
+                config.sideLock = next
+                resetSuggestionState()
+                lastVoiceKey = null
+                autoVoice?.onNewPosition()
+                currentCanonical?.let { currentFen = AssistBoard.toFen(it, tracker.redGo) }
+                diagLog?.appendEvent("我方锁定", next)
+                postRender()
+                scheduleAnalysis()
+                val label = when (next) {
+                    "red" -> "锁红（红棋是我方）"
+                    "black" -> "锁黑（黑棋是我方）"
+                    else -> "自动（屏幕下方为我方）"
+                }
+                setStatus("我方：$label\n换盘、重启都保持")
             }
             OverlayAction.CYCLE_STRENGTH -> cycleStrength()
             OverlayAction.CYCLE_TIME -> cycleTime()
@@ -1751,7 +1780,16 @@ class ScreenAssistService : Service() {
     }
 
     /** 我方颜色（随动自动判定：屏幕下方阵营=我方，红在下=我方执红） */
-    private fun mySideIsRed(): Boolean = currentOrientation == Orientation.STANDARD
+    /**
+     * v1.27：我方阵营。默认沿用原作者口径（屏幕下方阵营＝我方，由识别朝向推断）；
+     * 用户在悬浮面板锁定红/黑后**优先用锁定值**，换盘、重启都不变 —— 解决
+     * 「第一盘黑、第二盘红，它还以为我是黑」和「每盘都判反」两类问题。
+     */
+    private fun mySideIsRed(): Boolean = when (config.sideLock) {
+        "red" -> true
+        "black" -> false
+        else -> currentOrientation == Orientation.STANDARD
+    }
 
     @Volatile private var lastStatusText = "未启动"
     /** setStatus 的瞬时提示文案：只在随后一次渲染中生效（此后回到常规状态文案），由主线程消费后清空 */
@@ -1970,6 +2008,15 @@ class ScreenAssistService : Service() {
             }
         }
 
+        // v1.27 语音提速：以前只在 bestmove（onSearchDone）念，面板 info 流里
+        // 早就写出「建议 X」了，用户看着「算出来了」却要等完整搜索跑完才出声。
+        // 现在建议一「成熟」（最佳着连续 1.2s 不变 / 搜索结束）就念，按局面去重
+        // 保证 bestmove 再来时不会念第二遍，也不会念暂定的浅层 PV。
+        if (suggestMature && myTurn && recHealthy && !paused) {
+            val matureUcci = line?.pv?.firstOrNull() ?: a?.bestUcci
+            if (matureUcci != null) voiceOnSettled(fen, matureUcci, mature = true)
+        }
+
         panel.render(OverlayModel(
             stateText = stateText,
             stateKind = stateKind,
@@ -1994,6 +2041,11 @@ class ScreenAssistService : Service() {
             depthText = if (!searchModeIsTime) strengthLevels[strengthIndex].second.toString() else null,
             timeText = if (searchModeIsTime) timeLevels[timeIndex].second.let { "${it / 1000}s" } else null,
             hashText = hashLevels[hashIndex].toString(),
+            sideLockText = when (config.sideLock) {
+                "red" -> "我方 红 ✓"
+                "black" -> "我方 黑 ✓"
+                else -> "我方 自动"
+            },
             engineText = if (engineName == ENGINE_ONNX) "ONNX" else "YOLO",
             multiPv = multiPv,
         ))

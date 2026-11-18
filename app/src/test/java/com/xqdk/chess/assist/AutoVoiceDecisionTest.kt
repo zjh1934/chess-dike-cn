@@ -27,7 +27,7 @@ class AutoVoiceDecisionTest {
         val v = AutoVoiceDecision.decide(startFen, "a0a1", myTurn = true,
             fromIsOurs = red, lastKey = null, mature = true)
         assertTrue(v.speak)
-        assertEquals("$startFen|a0a1", v.key)
+        assertEquals("v1.27：按局面去重", startFen, v.key)
         report("定着 + 我方回合 + 起点是我方棋子 → 自动读中文着法（内容就是面板那句）")
     }
 
@@ -43,13 +43,14 @@ class AutoVoiceDecisionTest {
     }
 
     @Test
-    fun `同一局面同一招只念一次 换局面或换招可再念`() {
+    fun `同一局面只念一次 换局面可再念`() {
         val red = AutoVoiceDecision.fromIsOurs(startFen, "a0a1", myRed = true)
-        val key = "$startFen|a0a1"
+        val key = startFen
         assertFalse("重复不念", AutoVoiceDecision.decide(startFen, "a0a1", true, red, key, true).speak)
         assertTrue("新局面可再念", AutoVoiceDecision.decide("$startFen-x", "a0a1", true, red, key, true).speak)
-        assertTrue("同一局面换了着法可再念", AutoVoiceDecision.decide(startFen, "a0a2", true, red, key, true).speak)
-        report("同一局面同一招只念一次；新局面 / 新着法都会重新念，不会刷屏")
+        // v1.27：成熟时念过一次后，bestmove 换了着法也不补念第二招
+        assertFalse("同一局面换着法也不补念", AutoVoiceDecision.decide(startFen, "a0a2", true, red, key, true).speak)
+        report("按局面去重：成熟即念一次，bestmove 不重复念；新局面重新念")
     }
 
     @Test
@@ -168,6 +169,85 @@ class AutoVoiceDecisionTest {
         val gradle = read("app/build.gradle.kts")
         assertTrue("onnxruntime 依赖在", gradle.contains("libs.onnxruntime.android"))
         report("两套识别引擎齐备：ONNX 角点+分类由 CI 注入 APK（sha256 校验），YOLO 随包回退；不进 git、出包后逐个 APK 校验")
+    }
+
+    @Test
+    fun `v1_27 五项改动逐条在源码里`() {
+        fun read(rel: String): String {
+            for (c in listOf(rel, rel.removePrefix("app/"), "../" + rel)) {
+                val f = java.io.File(c); if (f.exists()) return f.readText()
+            }
+            return ""
+        }
+        val svc = read("app/src/main/java/com/xqdk/chess/assist/ScreenAssistService.kt")
+        val cfg = read("app/src/main/java/com/xqdk/chess/assist/AssistConfig.kt")
+        val panel = read("app/src/main/java/com/xqdk/chess/assist/ui/OverlayPanelView.kt")
+        val chess = read("app/src/main/java/com/xqdk/chess/assist/ui/OverlayChessView.kt")
+        val layout = read("app/src/main/res/layout/overlay_panel.xml")
+        val act = read("app/src/main/java/com/xqdk/chess/assist/ui/AssistActivity.kt")
+        val rec = read("app/src/main/java/com/xqdk/chess/assist/OnnxBoardRecognizer.kt")
+        val voice = read("app/src/main/java/com/xqdk/chess/assist/AutoVoice.kt")
+        val ci = read(".github/workflows/cn-build.yml")
+        assertFalse("必须读到全部源码", listOf(svc,cfg,panel,chess,layout,act,rec,voice,ci).any { it.isEmpty() })
+
+        // ① 红黑锁定（换盘不串）
+        assertTrue("持久化字段在", cfg.contains("var sideLock") && cfg.contains("KEY_SIDE_LOCK"))
+        assertTrue("默认自动=上游口径", cfg.contains("getString(KEY_SIDE_LOCK, \"auto\")"))
+        assertTrue("mySideIsRed 优先锁定", svc.contains("when (config.sideLock)") &&
+            svc.contains("\"red\" -> true") && svc.contains("\"black\" -> false"))
+        assertTrue("三态互斥循环", svc.contains("\"auto\" -> \"red\"") &&
+            svc.contains("\"red\" -> \"black\""))
+        assertTrue("锁定后重建建议", svc.contains("OverlayAction.SIDE_LOCK") &&
+            svc.contains("config.sideLock = next"))
+        assertTrue("面板有锁定按钮", panel.contains("OverlayAction.SIDE_LOCK") &&
+            panel.contains("model.sideLockText"))
+        assertTrue("按钮放大且文字清楚", layout.contains("android:layout_height=\"34dp\"") &&
+            layout.contains("我方 自动"))
+        assertFalse("换盘不得清空锁定", svc.substring(
+            svc.indexOf("private fun onBoardConfirmed"),
+            svc.indexOf("private fun flatten")).contains("sideLock"))
+        report("① 我方 自动/红/黑 三态锁定，持久化，换盘重启不串；按钮 34dp 大字")
+
+        // ② 点棋盘 = 更新键
+        assertTrue("单击改绑更新轮次", chess.contains("onBoardTap") &&
+            !chess.contains("onNextCandidate") &&
+            chess.contains("if (isDouble) onTripleAnalysis?.invoke() else onBoardTap?.invoke()"))
+        assertTrue("面板映射到 FLIP_TURN", panel.contains("chess.onBoardTap = { onAction?.invoke(OverlayAction.FLIP_TURN) }"))
+        assertTrue("原「变着」按钮仍承担切候选", panel.contains("btnChange.setOnClickListener"))
+        assertTrue("更新动作写诊断", svc.contains("点小棋盘 → 轮次翻转"))
+        assertFalse("小更新按钮不再绑 FLIP_TURN", panel.contains("btnTurn.setOnClickListener { onAction?.invoke(OverlayAction.FLIP_TURN) }"))
+        report("② 点一下小棋盘＝更新轮次；双击仍三变；切候选由「变着」按钮保留")
+
+        // ③ 引擎不再跳回
+        assertTrue("回填抑制监听器", act.contains("suppressEngineCheck") &&
+            act.contains("if (suppressEngineCheck) return@setOnCheckedChangeListener"))
+        assertTrue("按持久化配置回填", act.contains("cfgNow.recognizerEngine") &&
+            act.contains("service?.setRecognizerEngine(cfg.recognizerEngine)"))
+        assertFalse("不再按运行态回填", act.contains("val actual = if (svc.getRecognizerEngine()"))
+        assertTrue("失败时提示且不改写选择", act.contains("你的选择已保留，下次启动会重试"))
+        assertTrue("识别器暴露失败原因", rec.contains("lastLoadError"))
+        assertTrue("服务写诊断与状态栏", svc.contains("eng.lastLoadError") &&
+            svc.contains("用户配置不改写"))
+        report("③ 连线页切回来不再把 ONNX 静默改回 YOLO；失败原因进诊断日志，用户选择保留、下次重试")
+
+        // ④ 语音提速：成熟即念 + 按局面去重
+        assertTrue("renderOverlay 里成熟即念",
+            svc.contains("if (suggestMature && myTurn && recHealthy && !paused)") &&
+            svc.contains("voiceOnSettled(fen, matureUcci, mature = true)"))
+        assertTrue("按局面去重", voice.contains("val key = fen") &&
+            voice.contains("同一局面已念过"))
+        assertTrue("暂停不念", svc.contains("if (paused || overlayClosed) return"))
+        report("④ 建议成熟（1.2s 稳定）就念，不等 bestmove 完整搜索；一个局面只念一次")
+
+        // ⑤ 既有基建一个不少
+        assertTrue("上游 3 帧确认在", svc.contains("BoardTracker(config.confirmCount)"))
+        assertTrue("自动语音仍在", voice.contains("class AutoVoice"))
+        assertTrue("双模型注入仍在", ci.contains("4_v6-0301.onnx") &&
+            ci.contains("nano_v3-0319.onnx") && ci.contains("Verify ONNX models packaged"))
+        assertTrue("固定签名/包名门禁在", ci.contains("Verify fixed signing certificate") &&
+            ci.contains("Verify fixed applicationId"))
+        assertTrue("哈希按钮没动", panel.contains("setChipText(btnHash, \"哈希\", model.hashText)"))
+        report("⑤ 上游机制、自动语音、双模型、固定签名/包名、哈希按钮全部保留")
     }
 
     @Test

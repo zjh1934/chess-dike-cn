@@ -112,8 +112,18 @@ class AssistConfig(context: Context) {
         get() = sp.getString(KEY_LEARN_SIDE, "red") ?: "red"
         set(value) { sp.edit().putString(KEY_LEARN_SIDE, value).apply() }
 
+    /**
+     * 连线模式「我方阵营」锁定（用户 v1.27 拍板）："auto"=跟随原作者口径
+     * （屏幕下方阵营为我方，按识别朝向推断）/ "red" / "black"。
+     * 锁定后**换盘、重启都不变**，只有用户再点悬浮面板上的按钮才改。
+     */
+    var sideLock: String
+        get() = sp.getString(KEY_SIDE_LOCK, "auto") ?: "auto"
+        set(value) { sp.edit().putString(KEY_SIDE_LOCK, value).apply() }
+
     companion object {
         private const val KEY_RECOGNIZER_ENGINE = "recognizer_engine"
+        private const val KEY_SIDE_LOCK = "side_lock"
         private const val KEY_FRAME_W = "frame_w"
         private const val KEY_FRAME_H = "frame_h"
         private const val KEY_CONFIRM = "confirm_count"

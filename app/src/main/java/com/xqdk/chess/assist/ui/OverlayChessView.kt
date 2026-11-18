@@ -88,7 +88,9 @@ class OverlayChessView @JvmOverloads constructor(
         }
 
     /** 用户点击棋盘切换候选时回调（非手动模式） */
-    var onNextCandidate: (() -> Unit)? = null
+    /** v1.27：单击小棋盘 = 触发「更新棋局」（翻转轮次）。原「切换候选」由面板
+     *  的「变着」按钮承担，不丢功能；双击仍是「三变解析」。 */
+    var onBoardTap: (() -> Unit)? = null
 
     /** 双击棋盘（窗口内两下）触发单次三变解析回调（非手动模式） */
     var onTripleAnalysis: (() -> Unit)? = null
@@ -269,13 +271,13 @@ class OverlayChessView @JvmOverloads constructor(
             if (manualMode) {
                 hitCell(event.x, event.y)?.let { onCellTap?.invoke(it.first, it.second) }
             } else {
-                // 双击三变：窗口内第二次抬起触发单次三变（首下仍走候选切换——
-                // 1 路默认下无候选可切，无副作用；服务端三变会重置候选序号）。
-                // 触发后清空：连点三下 = 切换 → 三变 → 切换，不连发三变
+                // v1.27：首下 = 点棋盘更新轮次（用户原话「点一下悬浮面板上的棋盘
+                // 就代表我点了那个更新键」）；窗口内第二下 = 三变解析。
+                // 触发后清空时间戳：连点三下 = 更新 → 三变 → 更新，不连发三变
                 val now = SystemClock.elapsedRealtime()
                 val isDouble = lastBoardTapAt >= 0 && now - lastBoardTapAt <= TRIPLE_TAP_WINDOW_MS
                 lastBoardTapAt = if (isDouble) -1L else now
-                if (isDouble) onTripleAnalysis?.invoke() else onNextCandidate?.invoke()
+                if (isDouble) onTripleAnalysis?.invoke() else onBoardTap?.invoke()
             }
             return true
         }

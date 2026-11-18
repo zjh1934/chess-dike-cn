@@ -205,9 +205,10 @@
             android:id="@+id/overlay_btn_turn"
             style="@style/OverlayAction"
             android:layout_width="match_parent"
-            android:layout_height="23dp"
-            android:layout_marginTop="2dp"
-            android:text="更新" />
+            android:layout_height="34dp"
+            android:layout_marginTop="4dp"
+            android:textStyle="bold"
+            android:text="我方 自动" />
 
         <TextView
             android:id="@+id/overlay_btn_pause"

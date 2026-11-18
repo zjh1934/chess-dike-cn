@@ -18,7 +18,7 @@ import java.util.Locale
  * 设计约束（用户原话：「自动读，读支招的内容，放弃原来的瞎改」）：
  * - 不加开关、不加档位、不改设置页；语音恒开，内容就是着法本身（如「炮二平五」）
  * - 不念暂定 PV、不念对方回合的「若对方走X我方应Y」预案、不念分数与「建议/✓」
- * - 同一局面同一招只念一次；新局面由 [onNewPosition] 重置
+ * - 同一局面只念一次（成熟即念，bestmove 不补念）；新局面由 [onNewPosition] 重置
  * - 只念我方起点是我方棋子的着法（与上游 renderOverlay 的 fromIsOurs 同口径）
  * - 朗读走媒体流、跟随系统音量；打断用 QUEUE_FLUSH，不排队越积越多
  * - TTS 掉线自愈：speak 后 1.5s 没收到 onStart 回执就重建实例并补念一次
@@ -200,8 +200,10 @@ object AutoVoiceDecision {
         if (!mature) return Verdict(false, "", "非定着(暂定PV不念)")
         if (!myTurn) return Verdict(false, "", "对方回合预案不念")
         if (!fromIsOurs) return Verdict(false, "", "起点不是我方棋子")
-        val key = "$fen|$ucci"
-        if (key == lastKey) return Verdict(false, key, "同一局面同一招已念过")
+        // v1.27：按**局面**去重，不是按「局面|着法」。成熟时念过一次后，
+        // bestmove 再来（哪怕引擎改了主意）也不补念第二招 —— 一个局面只给一招。
+        val key = fen
+        if (key == lastKey) return Verdict(false, key, "同一局面已念过")
         return Verdict(true, key, "定着·我方·首次 → 念中文着法")
     }
 

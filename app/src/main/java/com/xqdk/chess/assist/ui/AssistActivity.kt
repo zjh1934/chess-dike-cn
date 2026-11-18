@@ -86,6 +86,9 @@ class AssistActivity : AppCompatActivity() {
 
     private var service: ScreenAssistService? = null
     private var bound = false
+    /** v1.27：程序化回填 RadioGroup 时抑制监听器，避免把「运行态回退」误写回配置 */
+    private var suppressEngineCheck = false
+    private var engineFallbackWarned = false
 
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
@@ -212,6 +215,7 @@ class AssistActivity : AppCompatActivity() {
             else R.id.rb_engine_onnx
         ).isChecked = true
         rgEngine.setOnCheckedChangeListener { _, id ->
+            if (suppressEngineCheck) return@setOnCheckedChangeListener
             cfg.recognizerEngine = if (id == R.id.rb_engine_yolo)
                 ScreenAssistService.ENGINE_YOLO else ScreenAssistService.ENGINE_ONNX
             service?.setRecognizerEngine(cfg.recognizerEngine)
@@ -281,14 +285,27 @@ class AssistActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        // 回填识别引擎实际值：悬浮窗热切换（同步落盘）后页面无推送通道，停留中的
-        // 页面 RadioGroup 会显示与实际相反的选择（点选反而触发一次真切换）
+        // v1.27 修「选 ONNX 回头自动跳回 YOLO」：以前按服务**运行态**回填，
+        // ONNX 一旦加载失败回退 YOLO，isChecked=true 会再触发监听器 → 把 YOLO
+        // 写回持久化配置并下发，形成不可逆跳回。现在一律按**用户配置**回填，
+        // 且回填期间抑制监听器；运行态与配置不符时只提示，不改写用户选择。
+        val cfgNow = com.xqdk.chess.assist.AssistConfig(this)
+        val rgEngine = findViewById<RadioGroup>(R.id.rg_recognizer_engine)
+        val wanted = if (cfgNow.recognizerEngine == ScreenAssistService.ENGINE_YOLO)
+            R.id.rb_engine_yolo else R.id.rb_engine_onnx
+        suppressEngineCheck = true
+        if (rgEngine.checkedRadioButtonId != wanted) {
+            findViewById<RadioButton>(wanted).isChecked = true
+        }
+        suppressEngineCheck = false
         service?.let { svc ->
-            val rgEngine = findViewById<RadioGroup>(R.id.rg_recognizer_engine)
-            val actual = if (svc.getRecognizerEngine() == ScreenAssistService.ENGINE_YOLO)
-                R.id.rb_engine_yolo else R.id.rb_engine_onnx
-            if (rgEngine.checkedRadioButtonId != actual) {
-                findViewById<RadioButton>(actual).isChecked = true
+            val actualOnnx = svc.getRecognizerEngine() == ScreenAssistService.ENGINE_ONNX
+            if (!actualOnnx && cfgNow.recognizerEngine == ScreenAssistService.ENGINE_ONNX &&
+                !engineFallbackWarned) {
+                engineFallbackWarned = true
+                android.widget.Toast.makeText(this,
+                    "ONNX 本次加载失败，当前临时回退 YOLO（原因见悬浮面板提示/诊断日志）；你的选择已保留，下次启动会重试",
+                    android.widget.Toast.LENGTH_LONG).show()
             }
         }
         refreshStatus()

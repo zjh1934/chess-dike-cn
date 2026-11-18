@@ -11,9 +11,9 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 
 /**
- * 小棋盘点击手势契约（2026-11-09 双击三变）：窗口（3s）内两下 = 首下候选切换 +
- * 第二下触发三变；触发后时间戳归零——三连点 = 切换 → 三变 → 切换，不连发三变；
- * 手动模式点格两条手势回调都不走。
+ * 小棋盘点击手势契约（v1.27 更新）：窗口（3s）内两下 = 首下「点棋盘更新轮次」+
+ * 第二下触发三变；触发后时间戳归零——三连点 = 更新 → 三变 → 更新，不连发三变；
+ * 手动模式点格两条手势回调都不走。原「切换候选」已移到面板「变着」按钮。
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -29,19 +29,19 @@ class OverlayChessViewTapTest {
     }
 
     @Test
-    fun `双击窗口内=切换加三变 触发后时间戳归零`() {
+    fun `双击窗口内=更新加三变 触发后时间戳归零`() {
         val chess = OverlayChessView(RuntimeEnvironment.getApplication())
-        var cycles = 0
+        var boardTaps = 0
         var triples = 0
-        chess.onNextCandidate = { cycles++ }
+        chess.onBoardTap = { boardTaps++ }
         chess.onTripleAnalysis = { triples++ }
 
         tap(chess)
-        assertEquals(1 to 0, cycles to triples) // 首下 = 候选切换
+        assertEquals(1 to 0, boardTaps to triples) // 首下 = 点棋盘更新轮次
         tap(chess)
-        assertEquals(1 to 1, cycles to triples) // 窗口内第二下 = 触发三变
+        assertEquals(1 to 1, boardTaps to triples) // 窗口内第二下 = 触发三变
         tap(chess)
-        assertEquals(2 to 1, cycles to triples) // 触发后归零，第三下重起新对首下
+        assertEquals(2 to 1, boardTaps to triples) // 触发后归零，第三下重起新对首下
     }
 
     @Test
@@ -49,7 +49,7 @@ class OverlayChessViewTapTest {
         val chess = OverlayChessView(RuntimeEnvironment.getApplication())
         chess.manualMode = true
         var fired = 0
-        chess.onNextCandidate = { fired++ }
+        chess.onBoardTap = { fired++ }
         chess.onTripleAnalysis = { fired++ }
         tap(chess)
         tap(chess)

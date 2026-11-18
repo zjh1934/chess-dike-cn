@@ -69,6 +69,8 @@ class OverlayModel(
     val timeText: String? = null,
     /** 引擎 Hash 档值（"256"） */
     val hashText: String? = null,
+    /** v1.27 我方阵营锁定按钮文字（"我方 自动" / "我方 红" / "我方 黑"） */
+    val sideLockText: String = "我方 自动",
     /** 识别引擎档值（"ONNX"/"YOLO"）；null = 显示弱化占位 */
     val engineText: String? = null,
     /** 引擎变招路数（MultiPV 1-3）：左列档位按钮文字 "N变"（默认 1 路算力最全） */
@@ -96,6 +98,8 @@ enum class OverlayAction {
     MANUAL,
     /** 识别引擎热切换（ONNX ↔ YOLO）：切换后局面重新确认 */
     CYCLE_ENGINE,
+    /** v1.27 我方阵营锁定：自动 → 锁红 → 锁黑 → 自动（三态循环，换盘不串） */
+    SIDE_LOCK,
     /** 引擎变招路数（MultiPV）1→2→3→1 循环；1 路算力最全 */
     CYCLE_MULTIPV,
     /** 时间制时长档循环（仅时间制显示"时间"芯片；深度制由 CYCLE_STRENGTH 负责） */
@@ -219,7 +223,8 @@ class OverlayPanelView @JvmOverloads constructor(
         btnChange.setOnClickListener { onAction?.invoke(OverlayAction.CYCLE_CANDIDATE) }
         btnUndo.setOnClickListener { onAction?.invoke(OverlayAction.UNDO) }
         btnManual.setOnClickListener { onAction?.invoke(OverlayAction.MANUAL) }
-        btnTurn.setOnClickListener { onAction?.invoke(OverlayAction.FLIP_TURN) }
+        // v1.27：小「更新」按钮改为我方阵营锁定；更新轮次改由点小棋盘触发
+        btnTurn.setOnClickListener { onAction?.invoke(OverlayAction.SIDE_LOCK) }
         btnStrength.setOnClickListener { onAction?.invoke(OverlayAction.CYCLE_STRENGTH) }
         btnTime.setOnClickListener { onAction?.invoke(OverlayAction.CYCLE_TIME) }
         btnHash.setOnClickListener { onAction?.invoke(OverlayAction.CYCLE_HASH) }
@@ -238,7 +243,7 @@ class OverlayPanelView @JvmOverloads constructor(
                 onAction?.invoke(OverlayAction.CLOSE)
             }
         }
-        chess.onNextCandidate = { onAction?.invoke(OverlayAction.CYCLE_CANDIDATE) }
+        chess.onBoardTap = { onAction?.invoke(OverlayAction.FLIP_TURN) }
         chess.onTripleAnalysis = { onAction?.invoke(OverlayAction.TRIPLE_ANALYSIS) }
         chess.onCellTap = { x, y -> onCellTap?.invoke(x, y) }
     }
@@ -341,6 +346,8 @@ class OverlayPanelView @JvmOverloads constructor(
         setChipText(btnStrength, "深度", depthText)
         setChipText(btnTime, "时间", timeText)
         setChipText(btnHash, "哈希", model.hashText)
+        // v1.27：我方阵营锁定按钮（原「更新」位），文字随状态刷新
+        if (btnTurn.text != model.sideLockText) btnTurn.text = model.sideLockText
         setChipText(btnEngine, "引擎", model.engineText)
         val pauseText = if (model.paused) "继续" else "停止"
         if (btnPause.text != pauseText) btnPause.text = pauseText

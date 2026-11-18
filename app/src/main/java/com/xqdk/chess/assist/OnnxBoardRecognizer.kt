@@ -184,11 +184,16 @@ class OnnxBoardRecognizer(
     @Volatile var loaded = false
         private set
 
+    /** v1.27：最近一次加载失败的异常摘要，供服务层写状态栏与诊断日志 */
+    @Volatile var lastLoadError: String? = null
+        private set
+
     /** 加载两个模型（失败返回 false 并吞异常，由调用方决定回退策略） */
     @Synchronized
     fun load(): Boolean {
         if (loaded) return true
         return try {
+            lastLoadError = null
             val start = System.currentTimeMillis()
             run {
                 val bytes = assets.open(POSE_MODEL).use { it.readBytes() }
@@ -208,6 +213,7 @@ class OnnxBoardRecognizer(
             Log.i(TAG, "onnx models loaded in ${System.currentTimeMillis() - start}ms")
             true
         } catch (t: Throwable) {
+            lastLoadError = "${t.javaClass.simpleName}: ${t.message ?: "无消息"}".take(200)
             Log.e(TAG, "onnx 模型加载失败（检查 assets/models 下是否已放置 ONNX 文件）", t)
             release()
             false
