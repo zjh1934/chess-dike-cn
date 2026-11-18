@@ -154,7 +154,10 @@ class AutoVoiceDecisionTest {
             ci.contains("Verify ONNX models packaged") && ci.contains("unzip -l"))
         assertTrue("直链兜底在（gh 失败时不至于缺件）", ci.contains("curl -fsSL --retry 3"))
         // 模型文件仍不进 git，与上游 .gitignore 一致
-        val gi = read(".gitignore")
+        // Gradle 单测 workingDir 是 app/，裸 ".gitignore" 会命中 app/.gitignore
+        // （内容只有 /build）；仓库根那份在 ../.gitignore，逐个候选合并后断言。
+        val gi = listOf(".gitignore", "../.gitignore", "../../.gitignore")
+            .joinToString("\n") { read(it) }
         assertTrue("模型不进 git 的规则仍在", gi.contains("app/src/main/assets/models/*.onnx"))
         // 上游代码侧：默认 ONNX 主力、YOLO 回退仍在包里
         val cfg = read("app/src/main/java/com/xqdk/chess/assist/AssistConfig.kt")
