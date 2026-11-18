@@ -50,9 +50,13 @@
 - ⚠️ 沙盒出口把 `github.com/.../releases/download` 和 `api.github.com/.../releases/assets` 都挡了（403），**模型文件没法在沙盒里下载**；CI 跑在 GitHub 网络上，由它下载并做 sha256 校验。真正结果以 CI 为准
 - 本地无 Android SDK / Java 17，编译与出包由 GitHub CI 执行并核验
 
-### 出包结果
+### 出包结果（已核验）
 
-（推送并核验后补）
+- 远端 `main` = `d6b0e87b759d463bfea1e5332a03a0341597b72b`，标签 `cn-1.26` 同指向，已标 **Latest**
+- **push ✅ / 发布 ✅ 全绿**，15 步逐步核过：注入两个 ONNX → sha256 与字节数自检 → 单测 → 上游核心与语音自检 → 出包 → **Verify ONNX models packaged（逐个 APK 确认真含两个模型）** → 包名 → 签名指纹 → 上传 → 发 Release
+- 两个 APK 各 **84.8 MB**（v1.25 是 70.45 MB，多出来的就是注入后压缩的两个模型；上游 v3.4 是 163 MB，因为还带 74 MB 桔库）
+- **首轮 CI 两个 run 挂在 `AutoVoiceDecisionTest.kt:158`**：单测工作目录是 `app/`，`read(".gitignore")` 命中的是 `app/.gitignore`（只有 `/build`），不是仓库根那份。但**「注入原作者双识别模型」与「模型完整性自检」两步首轮就 success**，说明从上游公开 assets Release 下载模型并 sha256 校验这条路通了。改成合并三个候选路径后重推，第二次全绿；生产代码、CI 注入步、模型资产均未改动
+- Release 正文 22 行（含折叠），下载区紧跟正文，不用往下翻
 
 ---
 
