@@ -103,6 +103,7 @@
             android:maxLines="1"
             android:ellipsize="end"
             android:textColor="@color/qi_ivory"
+            android:clickable="true"
             android:visibility="gone" />
 
         <!-- 低频小按钮：2×2 网格（上行=变招/变招档，下行=悔棋/手动）。

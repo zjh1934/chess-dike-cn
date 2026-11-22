@@ -169,6 +169,8 @@ class OverlayPanelView @JvmOverloads constructor(
     var onAction: ((OverlayAction) -> Unit)? = null
     /** 手动模式：小棋盘点格（canonical x,y），由服务端处理选子/走子/删子 */
     var onCellTap: ((x: Int, y: Int) -> Unit)? = null
+    /** v1.28：点「建议/预案」文字行 → 重播当前这句（服务端直接调 TTS，不走 worker） */
+    var onCandidateTap: (() -> Unit)? = null
     /** 拖动开始/结束（遮挡黄字拖动豁免等） */
     var onDragStateChange: ((Boolean) -> Unit)? = null
 
@@ -246,6 +248,8 @@ class OverlayPanelView @JvmOverloads constructor(
         chess.onBoardTap = { onAction?.invoke(OverlayAction.FLIP_TURN) }
         chess.onTripleAnalysis = { onAction?.invoke(OverlayAction.TRIPLE_ANALYSIS) }
         chess.onCellTap = { x, y -> onCellTap?.invoke(x, y) }
+        // v1.28：候选/预案行本身就是「推荐走什么」那块文字，点一下重播当前这句
+        candidate.setOnClickListener { onCandidateTap?.invoke() }
     }
 
     fun render(model: OverlayModel) {

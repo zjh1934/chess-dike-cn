@@ -15,10 +15,14 @@ import java.util.Locale
  * 自动发一次完整搜索，定着后在悬浮面板显示中文着法。这里不碰任何识别 / 轮次 /
  * 引擎 / 渲染逻辑，只在「定着」那一刻把面板上那句中文着法**自动读出来**。
  *
- * 设计约束（用户原话：「自动读，读支招的内容，放弃原来的瞎改」）：
- * - 不加开关、不加档位、不改设置页；语音恒开，内容就是着法本身（如「炮二平五」）
- * - 不念暂定 PV、不念对方回合的「若对方走X我方应Y」预案、不念分数与「建议/✓」
- * - 同一局面只念一次（成熟即念，bestmove 不补念）；新局面由 [onNewPosition] 重置
+ * 设计约束（用户原话：「自动读，读支招的内容，放弃原来的瞎改」；v1.28 增补）：
+ * - 不加开关、不加档位、不改设置页；语音恒开，内容就是着法本身（如「炮二平五」，
+ *   v1.28 起剥掉面板上附带的 UCCI 坐标，不念字母）
+ * - 不念暂定 PV、不念分数与「建议/✓」；我方支招走 [decide]，对方回合
+ *   「若对方走X，我方应Y」预案走 [decidePreview] 单独念一次
+ * - 同一局面：我方支招只念一次、对方回合预案只念一次（成熟即念，bestmove 不补念）；
+ *   预案的应手起点按「对方走完后」的盘面校验，不念已经不成立的应手；
+ *   新局面由 [onNewPosition] 重置；**点一下面板上的建议/预案文字行可手动重播一次**
  * - 只念我方起点是我方棋子的着法（与上游 renderOverlay 的 fromIsOurs 同口径）
  * - 朗读走媒体流、跟随系统音量；打断用 QUEUE_FLUSH，不排队越积越多
  * - TTS 掉线自愈：speak 后 1.5s 没收到 onStart 回执就重建实例并补念一次
@@ -198,13 +202,39 @@ object AutoVoiceDecision {
         if (ucci.isNullOrBlank() || ucci == "(none)" || ucci.length < 4)
             return Verdict(false, "", "无着法或困毙")
         if (!mature) return Verdict(false, "", "非定着(暂定PV不念)")
-        if (!myTurn) return Verdict(false, "", "对方回合预案不念")
+        // v1.28：对方回合的「若对方走X，我方应Y」改由 decidePreview 单独念一次，
+        // 主决策仍只管我方回合的支招（保持 v1.27「我方走什么只播报一次」）。
+        if (!myTurn) return Verdict(false, "", "对方回合走预案专用决策")
         if (!fromIsOurs) return Verdict(false, "", "起点不是我方棋子")
         // v1.27：按**局面**去重，不是按「局面|着法」。成熟时念过一次后，
         // bestmove 再来（哪怕引擎改了主意）也不补念第二招 —— 一个局面只给一招。
         val key = fen
         if (key == lastKey) return Verdict(false, key, "同一局面已念过")
         return Verdict(true, key, "定着·我方·首次 → 念中文着法")
+    }
+
+    /**
+     * v1.28：对方回合预案「若对方走X，我方应Y」要不要念。
+     * 与主决策分开，键是「局面|预案」，所以和我方支招互不吃掉去重；同样只在
+     * 成熟（稳定/搜索结束）时念一次，暂定 PV、应手起点不是我方棋子都不念。
+     */
+    fun decidePreview(
+        fen: String,
+        oppUcci: String?,
+        myUcci: String?,
+        lastKey: String?,
+        mature: Boolean,
+        fromIsOurs: Boolean,
+    ): Verdict {
+        if (fen.isBlank()) return Verdict(false, "", "无局面")
+        if (oppUcci.isNullOrBlank() || oppUcci == "(none)" || oppUcci.length < 4 ||
+            myUcci.isNullOrBlank() || myUcci == "(none)" || myUcci.length < 4)
+            return Verdict(false, "", "预案缺着法或困毙")
+        if (!mature) return Verdict(false, "", "非定着(暂定预案不念)")
+        if (!fromIsOurs) return Verdict(false, "", "应手起点不是我方棋子")
+        val key = "$fen|预案"
+        if (key == lastKey) return Verdict(false, key, "同一局面预案已念过")
+        return Verdict(true, key, "对方回合定着预案 → 念「若对方走X，我方应Y」")
     }
 
     /** 着法起点是否是我方棋子：解析 FEN 盘面第 (fx,fy) 格的字母大小写。 */

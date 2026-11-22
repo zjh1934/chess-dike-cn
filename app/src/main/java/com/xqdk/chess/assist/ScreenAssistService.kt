@@ -288,8 +288,12 @@ class ScreenAssistService : Service() {
     // ===== 「回到原作者，只加语音」：本分支唯一增量 =====
     /** 自动朗读支招的语音组件；上游识别/支招/渲染逻辑一行不改 */
     private var autoVoice: AutoVoice? = null
-    /** 已念过的「局面|着法」键，同一局面同一招不重复念 */
+    /** 已念过的局面键（我方支招=fen，对方回合预案=fen|预案），同一局面不重复念 */
     @Volatile private var lastVoiceKey: String? = null
+    /** v1.28：当前面板建议/预案行对应的纯净朗读文本（不含「建议/✓/暂定」），点该行重播用 */
+    @Volatile private var currentVoiceText: String? = null
+    /** 手动重播防抖：350ms 内连点只算一次，避免双击念两遍 */
+    @Volatile private var lastVoiceRepeatAt = 0L
 
     /** 开局库候选（我方回合命中时非空；随 selectedCandidate 循环展示） */
     @Volatile private var bookMoves: List<BookData>? = null
@@ -1125,6 +1129,8 @@ class ScreenAssistService : Service() {
         stableSince = 0L
         searchSettled = false
         precomputeHit = false
+        // v1.28：旧建议的朗读文本立即作废，避免新局面第一帧点行重播到上一招
+        currentVoiceText = null
         // 渲染特征值一并作废：新局面的第一条 info 行必须触发渲染
         lastRenderedDepth = -1
         lastRenderedBest = null
@@ -1133,8 +1139,8 @@ class ScreenAssistService : Service() {
     /**
      * 「只加语音」的接线：**定着**才念。
      * 上游 renderOverlay 会随 info 流反复刷新「（暂定）」PV，这里只在
-     * 搜索完整结束 / 开局库命中 / 预判命中时调用一次，念的就是面板上那句中文着法。
-     * 不念分数、不念「建议/✓」、不念对方回合预案、不指挥动对方棋子。
+     * 搜索完整结束 / 开局库命中 / 预判命中 / 建议成熟时调用一次，念的就是面板上那句中文着法。
+     * 不念分数、不念「建议/✓」、不指挥动对方棋子；对方回合预案走 [voiceOnPreview]。
      */
     private fun voiceOnSettled(fen: String, ucci: String?, mature: Boolean) {
         if (paused || overlayClosed) return
@@ -1145,14 +1151,68 @@ class ScreenAssistService : Service() {
         val d = AutoVoiceDecision.decide(fen, ucci, myTurn, ours, lastVoiceKey, mature)
         if (!d.speak) return
         lastVoiceKey = d.key
-        val text = describeSafe(fen, ucci!!)
+        val text = voiceChinese(fen, ucci!!)
+        currentVoiceText = text
         voice.speak(text)
         diagLog?.appendEvent("语音支招", text)
+    }
+
+    /**
+     * v1.28：对方回合「若对方走X，我方应Y」预案也自动念一次。
+     * 只在预案成熟（稳定/搜索结束）时念；键是「局面|预案」，与我方支招互不去重。
+     * 应手起点必须是我方棋子（与上游 renderOverlay 同口径），不念暂定 PV。
+     */
+    private fun voiceOnPreview(fen: String, oppUcci: String?, myUcci: String?, mature: Boolean) {
+        if (paused || overlayClosed) return
+        val voice = autoVoice ?: return
+        val myRed = mySideIsRed()
+        val opp = oppUcci!!
+        val my = myUcci!!
+        // v1.28 审查修正：应手是在「对方走完之后」才走的，起点必须按走完后的
+        // 盘面判断。用当前盘面会在对方恰好吃掉/占住应手起点时念出一招不成立的棋。
+        val afterOpp = AssistBoard.applyUcci(fen, opp)
+        val ours = AutoVoiceDecision.fromIsOurs(afterOpp, my, myRed)
+        val d = AutoVoiceDecision.decidePreview(fen, oppUcci, myUcci, lastVoiceKey, mature, ours)
+        if (!d.speak) return
+        lastVoiceKey = d.key
+        // 面板按上游原样显示带 UCCI 坐标；TTS 只念纯中文着法
+        val oppDesc = voiceChinese(fen, opp)
+        val myDesc = voiceChinese(afterOpp, my)
+        val text = "若对方走$oppDesc，我方应$myDesc"
+        currentVoiceText = text
+        voice.speak(text)
+        diagLog?.appendEvent("语音预案", text)
+    }
+
+    /**
+     * v1.28：点一下悬浮面板上的「建议 X / 若对方走X我方应Y」文字行 → 把当前这句再念一次。
+     * 不改去重键，纯手动重播；350ms 防抖，暂停/面板关闭不念。
+     */
+    private fun repeatVoice() {
+        if (paused || overlayClosed) return
+        val now = System.currentTimeMillis()
+        if (now - lastVoiceRepeatAt < 350L) return
+        val text = currentVoiceText ?: return
+        if (text.isBlank()) return
+        lastVoiceRepeatAt = now
+        autoVoice?.speak(text)
+        diagLog?.appendEvent("语音重播", text)
     }
 
     /** MoveChinese.describe 容错版：解析失败时原样返回 UCCI */
     private fun describeSafe(fen: String, ucci: String): String =
         try { MoveChinese.describe(fen, ucci) } catch (e: Exception) { ucci }
+
+    /**
+     * v1.28：朗读专用中文着法。MoveChinese.describe 返回「炮二平五 (h2e2)」，
+     * 面板按上游原样显示带 UCCI 坐标（不动），但 TTS 不该把字母坐标也念出来 ——
+     * 预案一句里有两个着法，会连念两串字母。这里只剥掉末尾的 " (ucci)"。
+     */
+    private fun voiceChinese(fen: String, ucci: String): String {
+        val s = describeSafe(fen, ucci)
+        val i = s.lastIndexOf(" (")
+        return if (i > 0 && s.endsWith(")")) s.substring(0, i) else s
+    }
 
     /**
      * 分析调度（worker 线程）：我方回合先查开局库（与对弈同款，命中即秒出且不占用
@@ -1404,6 +1464,9 @@ class ScreenAssistService : Service() {
         // currentCanonical/history/tracker，与帧循环并发会撕裂 ArrayDeque（原实现
         // 在 UI 线程原地改，与 post 到 worker 的 UNDO/FLIP 双线程并发写）
         panel.onCellTap = { x, y -> workerHandler.post { onManualCellTap(x, y) } }
+        // v1.28：点「建议 X / 若对方走X我方应Y」文字行 → 把当前这句再念一次。
+        // 不 post 到 worker：只读 currentVoiceText + 调 TTS，主线程执行最轻。
+        panel.onCandidateTap = { mainHandler.post { repeatVoice() } }
         panel.onDragStateChange = { dragging ->
             userDragging = dragging
             // 拖动结束即时重算遮挡（黄字沿变化显隐），不等 ≤700ms 的下一帧/tick
@@ -1479,6 +1542,9 @@ class ScreenAssistService : Service() {
         if (n > 0) {
             selectedCandidate = (selectedCandidate + 1) % n
             postRender()
+            // v1.28：切到新候选后把「新显示的那一招」再念一次。postRender 先入队，
+            // 这条 post 紧随其后，主线程 FIFO 保证读到的已经是新候选文本。
+            mainHandler.post { repeatVoice() }
         }
     }
 
@@ -1522,6 +1588,8 @@ class ScreenAssistService : Service() {
                 diagLog?.appendEvent("更新棋局", "点小棋盘 → 轮次翻转（原 ${tracker.redGo} → ${!tracker.redGo}）")
                 tracker.redGo = !tracker.redGo
                 resetSuggestionState()
+                // v1.28：轮次翻转后按新阵营重新算，允许再念一次（键不通吃旧局面）
+                lastVoiceKey = null
                 val canonical = currentCanonical
                 if (canonical != null) {
                     currentFen = AssistBoard.toFen(canonical, tracker.redGo)
@@ -1930,6 +1998,11 @@ class ScreenAssistService : Service() {
         var arrowFrom: Pair<Int, Int>? = null
         var arrowTo: Pair<Int, Int>? = null
         var suggestMature = false
+        // v1.28：这一行对应的纯净朗读文本（点候选行重播用）＋对方回合预案自动播报参数
+        var voiceText: String? = null
+        var previewOppU: String? = null
+        var previewMyU: String? = null
+        var previewMature = false
 
         when {
             myTurn && recHealthy && book != null && book.isNotEmpty() -> {
@@ -1943,6 +2016,7 @@ class ScreenAssistService : Service() {
                     arrowFrom = arrow.first
                     arrowTo = arrow.second
                     val chs = describeSafe(fen, ucci)
+                    voiceText = voiceChinese(fen, ucci)
                     candidateText = if (idx > 0) "开局库备选${idx + 1} $chs ✓" else "开局库 $chs ✓"
                     candidateTone = QiTone.GOOD
                     // 库内 vwin/vdraw/vlost 为胜/和/负场数，据此算胜率
@@ -1965,6 +2039,7 @@ class ScreenAssistService : Service() {
                     suggestMature = searchSettled ||
                         System.currentTimeMillis() - stableSince >= SUGGEST_STABLE_MS
                     val chs = describeSafe(fen, ucci)
+                    voiceText = voiceChinese(fen, ucci)
                     val arrow = ucciToCells(ucci)
                     arrowFrom = arrow.first
                     arrowTo = arrow.second
@@ -1992,10 +2067,19 @@ class ScreenAssistService : Service() {
                 // 画在当前盘面上会指向我方棋子，看起来像"我方打我方"
                 val oppU = line.pv[0]
                 val myU = line.pv[1]
-                if (fromIsOurs(myU)) {
+                // v1.28 审查修正：应手起点按「对方走完后」的盘面校验，
+                // 不再用当前盘面（否则对方吃掉应手起点时仍会念一招不成立的棋）。
+                val afterOppFen = AssistBoard.applyUcci(fen, oppU)
+                if (AutoVoiceDecision.fromIsOurs(afterOppFen, myU, myRed)) {
                     val oppDesc = describeSafe(fen, oppU)
-                    val myDesc = describeSafe(AssistBoard.applyUcci(fen, oppU), myU)
+                    val myDesc = describeSafe(afterOppFen, myU)
+                    // 面板保持上游原样（带 UCCI 坐标）；朗读只念纯中文着法
+                    voiceText = "若对方走${voiceChinese(fen, oppU)}，我方应${voiceChinese(afterOppFen, myU)}"
                     candidateText = "若对方走$oppDesc\n我方应$myDesc"
+                    previewOppU = oppU
+                    previewMyU = myU
+                    previewMature = searchSettled ||
+                        System.currentTimeMillis() - stableSince >= SUGGEST_STABLE_MS
                     advantageText = "${lineScoreText(line)} 深${line.depth}"
                     // 色调按我方视角（红方视角与我方阵营同向为 GOOD）；isRedFavored 对杀棋行
                     // 走 mateIn 符号（redScoreCp 恒 0 不可用），执黑被杀时不再亮"好"色
@@ -2016,6 +2100,18 @@ class ScreenAssistService : Service() {
             val matureUcci = line?.pv?.firstOrNull() ?: a?.bestUcci
             if (matureUcci != null) voiceOnSettled(fen, matureUcci, mature = true)
         }
+
+        // v1.28：对方回合「若对方走X，我方应Y」也自动念一次，只念成熟的那句，
+        // 键是「局面|预案」，与我方支招互不去重；不念暂定 PV。
+        if (previewMature && !myTurn && recHealthy && !paused &&
+            previewOppU != null && previewMyU != null) {
+            voiceOnPreview(fen, previewOppU, previewMyU, mature = true)
+        }
+
+        // 当前面板上这句建议/预案的可重播文本（点候选行时用；含我方支招与对方回合预案）。
+        // v1.28 审查修正：只在有文本时写。「引擎思考中」这类空帧不能把刚念过的
+        // 那句清掉；新局面由 resetSuggestionState 先置 null，不会重播到上一招。
+        voiceText?.let { currentVoiceText = it }
 
         panel.render(OverlayModel(
             stateText = stateText,

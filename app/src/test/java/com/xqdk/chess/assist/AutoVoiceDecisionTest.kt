@@ -6,12 +6,15 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * v1.25「回到原作者，只加语音」的出包前自检。
+ * v1.25「回到原作者，只加语音」的出包前自检；v1.28 增补预案播报、点行重播，
+ * 以及朗读文本剥 UCCI 坐标 / 应手按对方走完后盘面校验的审查修正。
  *
  * 用户原话：「使用原作者的源代码，只加语音，还是原作者的好用，自动读，读支招的
- * 内容，放弃原来的瞎改」。所以这里不测点按档、不测帧闸门，只验两件事：
- *  1) 语音决策：定着/我方/首次才念，暂定 PV、对方回合预案、动别人棋子都不念；
- *  2) 源码形态：app/src/main 与上游 v3.4 一致、瞎改组件一个都不剩、接线齐全。
+ * 内容，放弃原来的瞎改」。所以这里不测点按档、不测帧闸门，只验三件事：
+ *  1) 语音决策：定着/我方/首次才念，暂定 PV、对方回合主决策、动别人棋子都不念；
+ *     对方回合「若对方走X，我方应Y」由 decidePreview 单独念一次；
+ *  2) 点建议/预案文字行可手动重播一次，不改去重键；
+ *  3) 源码形态：app/src/main 与上游 v3.4 一致、瞎改组件一个都不剩、接线齐全。
  */
 class AutoVoiceDecisionTest {
 
@@ -32,14 +35,14 @@ class AutoVoiceDecisionTest {
     }
 
     @Test
-    fun `暂定PV 对方回合预案 对方棋子 都不念`() {
+    fun `暂定PV 对方回合主决策 对方棋子 都不念`() {
         val red = AutoVoiceDecision.fromIsOurs(startFen, "a0a1", myRed = true)
         assertFalse("暂定 PV 不念", AutoVoiceDecision.decide(startFen, "a0a1", true, red, null, false).speak)
-        assertFalse("对方回合预案不念", AutoVoiceDecision.decide(startFen, "a0a1", false, red, null, true).speak)
+        assertFalse("对方回合主决策不念（预案走 decidePreview）", AutoVoiceDecision.decide(startFen, "a0a1", false, red, null, true).speak)
         assertFalse("起点不是我方棋子不念", AutoVoiceDecision.decide(startFen, "a0a1", true, false, null, true).speak)
         assertFalse("无着法不念", AutoVoiceDecision.decide(startFen, null, true, red, null, true).speak)
         assertFalse("困毙不念", AutoVoiceDecision.decide(startFen, "(none)", true, red, null, true).speak)
-        report("暂定着法 / 对方回合「若对方走X我方应Y」/ 动别人棋子 / 无着法 / 困毙 一律不念")
+        report("暂定着法 / 对方回合主决策 / 动别人棋子 / 无着法 / 困毙 一律不念；预案由 decidePreview 单独念")
     }
 
     @Test
@@ -54,6 +57,97 @@ class AutoVoiceDecisionTest {
     }
 
     @Test
+    fun `对方回合预案自动读一次`() {
+        val oppU = "e9e8"
+        val myU = "a0a1"
+        val ours = AutoVoiceDecision.fromIsOurs(startFen, myU, myRed = true)
+        assertTrue("应手起点是我方棋子", ours)
+        val v = AutoVoiceDecision.decidePreview(startFen, oppU, myU, null, true, ours)
+        assertTrue(v.speak)
+        assertEquals("v1.28：预案键带 |预案", "$startFen|预案", v.key)
+        assertFalse("同一局面预案不重复念",
+            AutoVoiceDecision.decidePreview(startFen, oppU, myU, v.key, true, ours).speak)
+        assertFalse("暂定预案不念",
+            AutoVoiceDecision.decidePreview(startFen, oppU, myU, null, false, ours).speak)
+        assertFalse("应手起点不是我方棋子不念",
+            AutoVoiceDecision.decidePreview(startFen, oppU, myU, null, true, false).speak)
+        assertFalse("缺着法不念",
+            AutoVoiceDecision.decidePreview(startFen, null, myU, null, true, ours).speak)
+        assertFalse("困毙不念",
+            AutoVoiceDecision.decidePreview(startFen, oppU, "(none)", null, true, ours).speak)
+        val main = AutoVoiceDecision.decide(startFen, myU, true, ours, v.key, true)
+        assertTrue("预案键不吃掉我方支招", main.speak)
+        report("对方回合「若对方走X，我方应Y」成熟即自动念一次；与我方支招互不占用去重键")
+    }
+
+    @Test
+    fun `v1_28 语音预案与点行重播逐条在源码里`() {
+        fun read(rel: String): String {
+            for (c in listOf(rel, rel.removePrefix("app/"), "../" + rel)) {
+                val f = java.io.File(c); if (f.exists()) return f.readText()
+            }
+            return ""
+        }
+        val svc = read("app/src/main/java/com/xqdk/chess/assist/ScreenAssistService.kt")
+        val voice = read("app/src/main/java/com/xqdk/chess/assist/AutoVoice.kt")
+        val panel = read("app/src/main/java/com/xqdk/chess/assist/ui/OverlayPanelView.kt")
+        val layout = read("app/src/main/res/layout/overlay_panel.xml")
+        assertTrue("必须读到源码", svc.isNotEmpty() && voice.isNotEmpty() &&
+            panel.isNotEmpty() && layout.isNotEmpty())
+
+        assertTrue("预案专用决策在", voice.contains("fun decidePreview"))
+        assertTrue("主决策对方回合改走预案专用决策", voice.contains("对方回合走预案专用决策"))
+        assertTrue("预案键带 |预案", voice.contains("对方回合定着预案 → 念「若对方走X，我方应Y」"))
+        assertTrue("服务有预案播报入口", svc.contains("private fun voiceOnPreview"))
+        assertTrue("renderOverlay 里预案成熟才念",
+            svc.contains("if (previewMature && !myTurn && recHealthy && !paused &&") &&
+            svc.contains("voiceOnPreview(fen, previewOppU, previewMyU, mature = true)"))
+        assertTrue("当前可重播文本随渲染更新（空帧不清空）",
+            svc.contains("voiceText?.let { currentVoiceText = it }") &&
+            svc.contains("currentVoiceText = null"))
+        assertTrue("手动重播方法在", svc.contains("private fun repeatVoice()") &&
+            svc.contains("autoVoice?.speak(text)") && svc.contains("语音重播") &&
+            svc.contains("lastVoiceRepeatAt") && svc.contains("350L"))
+        assertTrue("候选行点击回调在", panel.contains("var onCandidateTap") &&
+            panel.contains("candidate.setOnClickListener { onCandidateTap?.invoke() }"))
+        assertTrue("候选行可点击", layout.contains("android:clickable"))
+        assertTrue("服务绑定点行重播", svc.contains("panel.onCandidateTap = { mainHandler.post { repeatVoice() } }"))
+        // 精确验证 cycleCandidate 段真的接了重播（以前只断言一个在绑定处也出现的
+        // 通用字符串，等于没测到；v1.28 审查时收紧）
+        val iCycle = svc.indexOf("private fun cycleCandidate")
+        val iTriple = svc.indexOf("private fun onTripleTap")
+        assertTrue("cycleCandidate 段存在", iCycle > 0 && iTriple > iCycle)
+        assertTrue("变招后重播新候选", svc.substring(iCycle, iTriple).contains("repeatVoice()"))
+        assertEquals("v1.28 不新增 voiceOnSettled 调用点（仍 4 处）",
+            4, svc.split("voiceOnSettled").size - 1 - 1)
+
+        // ---- v1.28 手动审查修正：朗读不念字母坐标 / 应手按走完后盘面判定 ----
+        assertTrue("朗读专用中文着法方法在", svc.contains("private fun voiceChinese") &&
+            svc.contains("s.lastIndexOf(\" (\")") && svc.contains("s.endsWith(\")\")"))
+        assertTrue("我方支招朗读走 voiceChinese",
+            svc.contains("val text = voiceChinese(fen, ucci!!)"))
+        assertTrue("开局库/我方候选的朗读文本走 voiceChinese",
+            svc.contains("voiceText = voiceChinese(fen, ucci)"))
+        // 注意：Kotlin 字符串里 ${...} / $var 会被当模板插值，不能把源码原句整段
+        // 塞进 contains（会编译报未解析引用）。改成拆开断言固定片段。
+        assertTrue("预案朗读文本走 voiceChinese（两个着法都不念坐标）",
+            svc.contains("voiceText = \"若对方走") &&
+            svc.contains("voiceChinese(fen, oppU)") &&
+            svc.contains("voiceChinese(afterOppFen, myU)"))
+        assertTrue("预案应手按对方走完后的盘面判起点",
+            svc.contains("val afterOppFen = AssistBoard.applyUcci(fen, oppU)") &&
+            svc.contains("AutoVoiceDecision.fromIsOurs(afterOppFen, myU, myRed)"))
+        assertTrue("voiceOnPreview 同样按走完后盘面判起点",
+            svc.contains("val afterOpp = AssistBoard.applyUcci(fen, opp)") &&
+            svc.contains("val ours = AutoVoiceDecision.fromIsOurs(afterOpp, my, myRed)"))
+        assertTrue("面板文字仍按上游原样带 UCCI 坐标",
+            svc.contains("val oppDesc = describeSafe(fen, oppU)") &&
+            svc.contains("val myDesc = describeSafe(afterOppFen, myU)") &&
+            svc.contains("candidateText = \"若对方走"))
+        report("v1.28：对方回合预案自动念一次；点建议/预案行或切变招再念一次；朗读剥字母坐标、应手按走完后盘面校验")
+    }
+
+    @Test
     fun `执黑时黑方底线是我方 红方棋子不是我方`() {
         // e9e8：fy = 9 - 9 = 0 → FEN 第一行「rnbakabnr」第 4 格 = 黑将 k
         assertTrue("执黑：黑将是我方", AutoVoiceDecision.fromIsOurs(startFen, "e9e8", myRed = false))
@@ -61,6 +155,24 @@ class AutoVoiceDecisionTest {
         assertFalse("执红：黑将不是我方", AutoVoiceDecision.fromIsOurs(startFen, "e9e8", myRed = true))
         assertFalse("越界坐标不误判", AutoVoiceDecision.fromIsOurs(startFen, "z9z8", myRed = true))
         report("执红/执黑都用 FEN 盘面大小写判起点，越界坐标安全返回 false")
+    }
+
+    @Test
+    fun `v1_28 应手起点按对方走完后的盘面判定`() {
+        val afterOpp = AssistBoard.applyUcci(startFen, "e9e8")
+        assertTrue("对方走一步后我方车仍在，应手成立",
+            AutoVoiceDecision.fromIsOurs(afterOpp, "a0a1", myRed = true))
+        // 手工把红方底线首格的红车清空（相当于被对方吃掉）：该应手不该再念
+        val parts = startFen.trim().split(" ").toMutableList()
+        val rows = parts[0].split("/").toMutableList()
+        rows[9] = "1" + rows[9].drop(1)
+        parts[0] = rows.joinToString("/")
+        val eaten = parts.joinToString(" ")
+        assertFalse("应手起点被吃后不再念",
+            AutoVoiceDecision.fromIsOurs(eaten, "a0a1", myRed = true))
+        assertFalse("该预案决策也不念",
+            AutoVoiceDecision.decidePreview(startFen, "e9e8", "a0a1", null, true, false).speak)
+        report("预案应手按「对方走完后」的盘面校验，起点被吃/被占就不念")
     }
 
     @Test
@@ -254,7 +366,7 @@ class AutoVoiceDecisionTest {
 
     @Test
     fun `上游与语音自检通过`() {
-        report("上游 3 帧确认 / 自动识别 / 引擎定着 全保留；语音只在定着处自动读一次中文着法")
+        report("上游 3 帧确认 / 自动识别 / 引擎定着 全保留；我方支招与对方回合预案各自动念一次，点候选行可重播")
         println("上游与语音自检通过")
     }
 }
